@@ -7,7 +7,7 @@ import random
 ROLES = ["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED"]
 ROLES_DICT = {"VILLAGER":1, "SEER":2, "MEDIUM":3, "BODYGUARD":4, "WEREWOLF":5, "POSSESSED":6}
 TOKEN_TYPES = ['status', 'divine', 'whisper', 'guard', 'attackVote',    'attack', 'talk', 'vote', 'execute', 'result']
-dir = "GAT2017Log15"
+dir = "data/gat2017log15"
 role = "VILLAGER"
 num_player = 15
 num_channel = 8
@@ -95,7 +95,11 @@ for root, dirs, files in os.walk(dir, topdown=False):
                     elif tokens[-1].startswith('COMINGOUT'):
                         co_result = ROLES_DICT[tokens[-1].split(" ")[-1]]
                         day_status[0, 2, int(tokens[4])-1] = co_result
-            data.append(game_status)
+            role_list = []
+            for i in range(num_player):
+                role_list.append(ROLES_DICT[id_role[i]])
+            role_list = torch.Tensor(role_list, dtype=torch.int)
+            data.append((game_status, role_list))
 
 print("{} games loaded.".format(len(data)))
 print(data[0][0])
