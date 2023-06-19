@@ -2,21 +2,27 @@ import os
 import torch
 import copy
 import random
+import torch.nn.functional as F
 
 # if __name__ == __main__:
+MAX_DAY_LENGTH = 14
+NUM_LOGS = 99998 # 10^5-2
 ROLES = ["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED"]
 ROLES_DICT = {"VILLAGER":1, "SEER":2, "MEDIUM":3, "BODYGUARD":4, "WEREWOLF":5, "POSSESSED":6}
 TOKEN_TYPES = ['status', 'divine', 'whisper', 'guard', 'attackVote',    'attack', 'talk', 'vote', 'execute', 'result']
-dir = "data/gat2017log15"
+dir = "data/gat2017log15" # broken file: 398/076, 023/017
 role = "VILLAGER"
 num_player = 15
 num_channel = 8
-data = []
+data = torch.empty(NUM_LOGS, MAX_DAY_LENGTH, num_channel, num_player, num_player)
+labels = torch.empty(NUM_LOGS, num_player)
+log_count = 0
 for root, dirs, files in os.walk(dir, topdown=True):
     dirs.sort()
     for name in sorted(files):
         if name.endswith(".log"):
             with open(os.path.join(root, name), "r") as f:
+                log_count += 1
                 lines = f.readlines()
                 day_checker = 1
                 game_end = False
@@ -49,6 +55,7 @@ for root, dirs, files in os.walk(dir, topdown=True):
                                 if role == "VILLAGER":
                                     villagers_id.append(id)
                             id = random.choice(villagers_id)
+                            day_status[0, 0, id] = 1
                         have_voted = []
                         day_status[0, 3] = copy.deepcopy(prev_day_vote_matrix)
                         prev_day_vote_matrix = copy.deepcopy(vote_matrix)
@@ -96,14 +103,27 @@ for root, dirs, files in os.walk(dir, topdown=True):
                         elif tokens[-1].startswith('COMINGOUT'):
                             co_result = ROLES_DICT[tokens[-1].split(" ")[-1]]
                             day_status[0, 2, int(tokens[4])-1] = co_result
-                role_list = []
+                
+                assert game_status.shape[0] <= MAX_DAY_LENGTH
+                # game_status = torch.unsqueeze(F.pad(game_status, (0, 0, 0, 0, 0, 0, 0, MAX_DAY_LENGTH-game_status.shape[0]), "constant", 0), 0)
+
+                for i in range(MAX_DAY_LENGTH-game_status.shape[0]):
+                    game_status = torch.cat((game_status, torch.zeros((1, num_channel, num_player, num_player))), dim=0)
+                # game_status = torch.unsqueeze(game_status, 0)
+                # data = torch.cat((data, game_status), dim=0)
+                data[log_count-1] = game_status
+
+                label = []
                 for i in range(num_player):
-                    role_list.append(ROLES_DICT[id_role[i]])
-                role_list = torch.tensor(role_list, dtype=torch.int)
-                data.append((game_status, role_list))
+                    label.append(ROLES_DICT[id_role[i]])
+                label = torch.tensor(label, dtype=torch.int) # unsqueeze
+                # labels = torch.cat((labels, label), dim=0)
+                labels[log_count-1] = label
+                
     print("{} done.".format(root))
 
+assert log_count == 99998
 print("{} games loaded.".format(len(data)))
 # print(data[0][0])
-print(len(data[0][0]))
-torch.save(data, "logdata.pt")
+# print(len(data[0][0]))
+torch.save((data, labels), "gat2017log15.pt")
