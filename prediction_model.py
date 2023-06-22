@@ -3,6 +3,7 @@ from logloader import AIWolfDataset
 from torch.utils.data import DataLoader
 from torch import nn
 import random
+import numpy as np
 
 class CNNLSTM(nn.Module):
     def __init__(self, in_channel=8, hid_dim=800):
@@ -40,6 +41,23 @@ class CNNLSTM(nn.Module):
 
         return x
 
+class EarlyStopper:
+    def __init__(self, patience=1, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.min_validation_loss = np.inf
+
+    def early_stop(self, validation_loss):
+        if validation_loss < self.min_validation_loss:
+            self.min_validation_loss = validation_loss
+            self.counter = 0
+        elif validation_loss > (self.min_validation_loss + self.min_delta):
+            self.counter += 1
+            if self.counter >= self.patience:
+                return True
+        return False
+
 def train_loop(dataloader, model, loss_fn, optimizer, device):
     size = len(dataloader.dataset)
     # Set the model to training mode - important for batch normalization and dropout layers
@@ -60,6 +78,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, device):
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+    return loss
 
 
 def test_loop(dataloader, model, loss_fn, device):
@@ -83,6 +102,7 @@ def test_loop(dataloader, model, loss_fn, device):
     test_loss /= num_batches
     correct /= num_batches
     print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+    return test_loss
 
 if __name__ == '__main__':
     device = (
@@ -96,14 +116,20 @@ if __name__ == '__main__':
 
     dataset_dir = "gat2017log15.pt"
     aiwolf_dataset = AIWolfDataset(dataset_dir)
+    random.seed(10)
     # dataset specific
-    valid_set_indices = [*range(1000)]
+    indices = [*range(1000)]
     if 'gat2017log15' in dataset_dir:
         invalid_set_indices = [23, 398]
-        valid_set_indices = [i for i in valid_set_indices if i not in invalid_set_indices]
-    train_set_indices = random.sample(valid_set_indices, k=800)
-    test_set_indices = [i for i in valid_set_indices if i not in train_set_indices]
+        indices = [i for i in indices if i not in invalid_set_indices]
+    
+    train_set_indices = random.sample(indices, k=800)
+    valid_set_indices = [i for i in indices if i not in train_set_indices]
+    test_set_indices = random.sample(valid_set_indices, k=int(len(valid_set_indices)/2))
+    valid_set_indices = [i for i in valid_set_indices if i not in
+                        test_set_indices]
     train_indices = []
+    valid_indices = []
     test_indices = []
     for i in range(1000):
         if i < 23:
@@ -111,33 +137,49 @@ if __name__ == '__main__':
                 train_indices += [(100*i)+j for j in range(100)]
             elif i in test_set_indices:
                 test_indices += [(100*i)+j for j in range(100)]
+            elif i in valid_set_indices:
+                valid_indices += [(100*i)+j for j in range(100)]
         elif 23 < i < 398:
             if i in train_set_indices:
                 train_indices += [(100*i)+j-1 for j in range(100)]
             elif i in test_set_indices:
                 test_indices += [(100*i)+j-1 for j in range(100)]
+            elif i in valid_set_indices:
+                valid_indices += [(100*i)+j-1 for j in range(100)]
         else:
             if i in train_set_indices:
                 train_indices += [(100*i)+j-2 for j in range(100)]
             elif i in test_set_indices:
                 test_indices += [(100*i)+j-2 for j in range(100)]
-    assert len(set(test_indices+train_indices)) == 99800
+            elif i in valid_set_indices:
+                valid_indices += [(100*i)+j-2 for j in range(100)]
+    assert len(set(test_indices+train_indices+valid_indices)) == 99800, "got {}".format(len(set(test_indices+train_indices+valid_indices)))
+    
     train_dataset = torch.utils.data.Subset(aiwolf_dataset, train_indices)
     test_dataset = torch.utils.data.Subset(aiwolf_dataset, test_indices)
-    print("training dataset len: {}; testing dataset len: {}".format(len(train_dataset), len(test_dataset)))
-    train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
+    valid_dataset = torch.utils.data.Subset(aiwolf_dataset, valid_indices)
+    print("training dataset len: {}; valid dataset: {}, testing dataset len: {}".format(len(train_dataset), len(valid_dataset), len(test_dataset)))
 
     model = CNNLSTM().to(device)
     learning_rate = 1e-4
-    batch_size = 512
+    batch_size = 64
     epochs = 100
     loss_fn = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1)
+    stopper = EarlyStopper(patience=10, min_delta=-0.001)
+
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
 
     for t in range(epochs):
         print(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device)
-        test_loop(test_dataloader, model, loss_fn, device)
-    print("Done!")
+        valid_loss = test_loop(valid_dataloader, model, loss_fn, device)
+        if stopper.early_stop(valid_loss):
+            break
+    test_loss = test_loop(test_dataloader, model, loss_fn, device)
+    print("Test loss: {}".format(test_loss))
+
+    torch.save(model, 'overfit.pt')
 

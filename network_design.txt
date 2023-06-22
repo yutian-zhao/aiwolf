@@ -21,7 +21,7 @@ Guard [15] {0, 1} (specific)
 Werewolf [15] {0, 1} (specific)
 Medium [15] {0, 1} (specific)
 
-Talk
+Talk:
 Estimate [15, 15] {0, 14} (can be merged into attitude)
 Divine [15, 15] {-1, 0, 1} (can be merged into attitude)
 IDENTIFIED 
