@@ -16,7 +16,7 @@ class AIWolfDataset(Dataset):
         return self.data[idx], self.labels[idx]
 
 if __name__ == '__main__':
-    aiwolf_dataset = AIWolfDataset("gat2017log15.pt")
+    aiwolf_dataset = AIWolfDataset("data/gat2017log15.pt")
     data, label = aiwolf_dataset[0]
     torch.set_printoptions(profile="full")
     print(data[1])

@@ -6,11 +6,12 @@ import torch.nn.functional as F
 
 # if __name__ == __main__:
 MAX_DAY_LENGTH = 14
-NUM_LOGS = 99998 # 10^5-2
+NAME = 'temp_dataset' # "gat2017log15"
+NUM_LOGS = 10000 # 99998 # 10^5-2
 ROLES = ["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED"]
 ROLES_DICT = {"VILLAGER":1, "SEER":2, "MEDIUM":3, "BODYGUARD":4, "WEREWOLF":5, "POSSESSED":6}
 TOKEN_TYPES = ['status', 'divine', 'whisper', 'guard', 'attackVote',    'attack', 'talk', 'vote', 'execute', 'result']
-dir = "data/gat2017log15" # broken file: 398/076, 023/017
+dir = f"data/{NAME}" # broken file: 398/076, 023/017
 role = "VILLAGER"
 num_player = 15
 num_channel = 8
@@ -122,8 +123,8 @@ for root, dirs, files in os.walk(dir, topdown=True):
                 
     print("{} done.".format(root))
 
-assert log_count == 99998
+assert log_count == 10000 # 99998
 print("{} games loaded.".format(len(data)))
 # print(data[0][0])
 # print(len(data[0][0]))
-torch.save((data, labels), "gat2017log15.pt")
+torch.save((data, labels), f"data/{NAME}.pt")

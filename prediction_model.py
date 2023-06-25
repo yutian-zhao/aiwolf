@@ -7,10 +7,17 @@ import random
 import numpy as np
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
+import pandas as pd
 
 class CNNLSTM(nn.Module):
-    def __init__(self, in_channel=8, hid_dim=800, dropout=0.2):
+    def __init__(self, in_channel=8, hid_dim=800, dropout=0.2, cross_entropy=False):
         super().__init__()
+        self.cross_entropy = cross_entropy
+        if self.cross_entropy:
+            self.out_dim = 6*15
+        else:
+            self.out_dim = 15
+
         self.cnn = nn.Sequential(
             nn.BatchNorm2d(in_channel),
             nn.Conv2d(in_channel, 32, 3, stride=2),
@@ -31,7 +38,7 @@ class CNNLSTM(nn.Module):
             nn.Linear(hid_dim, hid_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hid_dim, 15),
+            nn.Linear(hid_dim, self.out_dim),
         )
 
     def forward(self, x):
@@ -43,7 +50,9 @@ class CNNLSTM(nn.Module):
         x = self.flat_linear(x)
         x = x.view(-1, seq_len, x.shape[-1])
         x, (hn, cn) = self.lstm(x)
-        x = self.linear(x[:, -1, :])
+        x = self.linear(x) # output on the last day
+        if self.cross_entropy:
+            x = x.view(-1, -1, 6, 15)
 
         return x
 
@@ -64,7 +73,17 @@ class EarlyStopper:
                 return True
         return False
 
-def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch):
+def compute_loss_weight(ratio, len):
+    output = []
+    item = 1
+    for i in range(len):
+        output.append(item)
+        item *= ratio
+    output = torch.tensor(output).float()
+    output /= torch.sum(output)
+    return output
+
+def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cross_entropy=False, ratio=1):
     size = len(dataloader.dataset)
     # Set the model to training mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
@@ -72,9 +91,17 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch):
     for batch, (X, y) in enumerate(dataloader):
         # Compute prediction and loss
         X = X.to(device)
+        if cross_entropy:
+            y = (y - 1).long()
         y = y.to(device)
         pred = model(X)
-        loss = loss_fn(pred, y)
+        L = pred.shape[1]
+        pred_t = pred[:,-1, :]
+        loss = loss_fn(pred, torch.unsqueeze(y, 1).expand(-1, L, -1)) # pred_t
+        # logging.info(f"Loss Shape: {loss.shape}")
+        loss = torch.sum(loss, dim=-1)
+        loss_weight = compute_loss_weight(ratio, L).to(device)
+        loss = torch.mean(loss@loss_weight)
 
         # Backpropagation
         loss.backward()
@@ -83,7 +110,11 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch):
 
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
-            accuracy = (torch.round(pred) == y).type(torch.float).sum()/torch.numel(y)
+            if cross_entropy:
+                pred_arg = torch.argmax(pred_t, dim=1)
+            else:
+                pred_arg = torch.round(pred_t)
+            accuracy = (pred_arg == y).type(torch.float).sum()/torch.numel(y)
             logging.info(f"loss: {loss:>7f}  accuracy: {accuracy:>7f}  [{current:>5d}/{size:>5d}]")
             
             writer.add_scalar('Loss/Train', loss,  epoch * len(dataloader) + 
@@ -93,36 +124,76 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch):
 
     return loss, accuracy
 
-
-def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode='valid'):
+def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode='valid', cross_entropy=False, ratio=1):
     # Set the model to evaluation mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
     model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     test_loss, accuracy = 0, 0
+    table = None
 
     # Evaluating the model with torch.no_grad() ensures that no gradients are computed during test mode
     # also serves to reduce unnecessary gradient computations and memory usage for tensors with requires_grad=True
     with torch.no_grad():
         for X, y in dataloader:
             X = X.to(device)
+            if cross_entropy:
+                y = (y - 1).long()
             y = y.to(device)
             pred = model(X)
-            test_loss += loss_fn(pred, y).item()
-            accuracy += (torch.round(pred) == y).type(torch.float).sum()/torch.numel(y)
+            L = pred.shape[1]
+            pred_t = pred[:,-1, :]
+            loss = loss_fn(pred, torch.unsqueeze(y, 1).expand(-1, L, -1))
+            loss = torch.sum(loss, dim=-1)
+            loss_weight = compute_loss_weight(ratio, L).to(device)
+            test_loss += torch.mean(loss@loss_weight)
+            # test_loss += loss_fn(pred_t, y).item()
+            if cross_entropy:
+                pred_ = torch.argmax(pred_t, dim=1)
+            else:
+                pred_ = torch.round(pred_t)
+            accuracy += (pred_ == y).type(torch.float).sum()/torch.numel(y)
+            if not table is None:
+                table += accuracy_table(pred, y)
+            else:
+                table = accuracy_table(pred, y)
 
     test_loss /= num_batches
     accuracy /= num_batches
+    table /= num_batches
+    df = pd.DataFrame(data=np.round(100*(table).cpu().detach().numpy(), decimals=1), index=["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED", 'mean'], columns=[*range(1, L+1)])
     logging.info(f"{mode} error: accuracy: {(100*accuracy):>0.1f}%, avg loss: {test_loss:>8f} \n")
+    logging.info(df)
+    logging.info('\n')
+    # logging.info("{} error: accuracy: {:.1f}%, avg loss: {:8f} \n {:.1f}".format(mode, 100*accuracy, test_loss, 100*table))
     if mode == 'valid':
         writer.add_scalar('Loss/Valid', test_loss, epoch * len(dataloader))
         writer.add_scalar('Accuracy/Valid', accuracy, epoch * len(dataloader))
-    return test_loss, accuracy
+    return test_loss, accuracy, df
+
+
+def accuracy_table(pred, target):
+    # pred: N, L, D
+    # target: N, 15
+    # output: 6, L
+    L = pred.shape[1]
+    output = torch.empty(7, L)
+    pred = torch.round(pred)
+    target_N = torch.unsqueeze(target, 1).expand(-1, L, -1)
+    ids = torch.unique(target, sorted=True)
+    assert len(ids) == 6
+    assert torch.max(ids) == 5 or torch.max(ids) == 6
+    for idx, id in enumerate(ids):
+        pred_id = torch.where(target_N==id, pred==id, 0)
+        output[idx] = torch.sum(pred_id, dim=[0, -1])/torch.sum(target==id)
+    output[-1] = torch.mean(output[:-1], dim=0)
+    return output
 
 if __name__ == '__main__':
     start_time = datetime.now()
     writer = SummaryWriter(filename_suffix='CNNLSTM')
+    pd.set_option("display.precision", 1)
     
     logging.basicConfig(filename='logs/{}.log'.format(start_time.strftime('%m%d%H%M%S')), format='%(asctime)s [%(levelname)s] %(message)s', encoding='utf-8', level=logging.INFO)
 
@@ -135,7 +206,8 @@ if __name__ == '__main__':
     )
     logging.info(f"Using {device} device")
 
-    dataset_dir = "gat2017log15.pt"
+    dataset_name = 'gat2017log15'
+    dataset_dir = f"data/{dataset_name}.pt"
     aiwolf_dataset = AIWolfDataset(dataset_dir)
     random.seed(10)
     # dataset specific
@@ -181,13 +253,23 @@ if __name__ == '__main__':
     valid_dataset = torch.utils.data.Subset(aiwolf_dataset, valid_indices)
     logging.info("training dataset len: {}; valid dataset: {}, testing dataset len: {}".format(len(train_dataset), len(valid_dataset), len(test_dataset)))
 
-    model = CNNLSTM().to(device)
-    writer.add_graph(model, train_dataset[0][0].unsqueeze(0).to(device))
     learning_rate = 1e-4
     batch_size = 64
     epochs = 100
     weight_decay = 1
-    loss_fn = nn.MSELoss()
+    ratio = 0.9
+    cross_entropy = False
+    if cross_entropy:
+        weight = torch.tensor([15/8, 15, 15, 15, 15/3, 15])
+        weight = weight/torch.sum(weight)
+        weight = weight.to(device)
+        # TODO: None reduction cross entropy loss need check!
+        loss_fn = nn.CrossEntropyLoss(weight=weight, reduction="none")
+    else:
+        loss_fn = nn.HuberLoss(reduction="none", delta=1.0) # nn.MSELoss(reduction="none") # 
+
+    model = CNNLSTM(cross_entropy=cross_entropy).to(device)
+    # writer.add_graph(model, train_dataset[0][0].unsqueeze(0).to(device))
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, 
                                   weight_decay=weight_decay)
     stopper = EarlyStopper(patience=10, min_delta=-0.001)
@@ -199,12 +281,13 @@ if __name__ == '__main__':
     for t in range(epochs):
         logging.info(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device, writer,
-                    epoch=t, )
-        valid_loss, valid_acc = test_loop(valid_dataloader, model, loss_fn, device, writer, epoch=t, mode='valid')
+                    epoch=t, cross_entropy=cross_entropy, ratio=ratio)
+        valid_loss, _ = test_loop(valid_dataloader, model, loss_fn, device, writer, epoch=t, mode='valid', cross_entropy=cross_entropy, ratio=ratio)
         if stopper.early_stop(valid_loss):
             break
-    test_loss, test_acc = test_loop(test_dataloader, model, loss_fn, device, mode='test')
+    test_loss, test_acc, test_table = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, ratio=ratio)
     writer.add_hparams({'lr': learning_rate, 'bsize': batch_size, "wdecay":weight_decay}, {'Loss/Test': test_loss, 'Accuracy/Test': test_acc})
+    test_table.to_csv('evals/CNNLSTM_{}_{}.csv'.format(dataset_name, start_time.strftime('%m%d%H%M%S')))
 
     end_time = datetime.now()
     duration = end_time - start_time
