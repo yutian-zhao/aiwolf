@@ -45,14 +45,15 @@ class CNNLSTM(nn.Module):
         """ Computes the forward pass """
         seq_len = x.shape[1]
         num_channel = x.shape[2]
-        x = x.view(-1, num_channel, 15, 15)
-        x = self.cnn(x)
-        x = self.flat_linear(x)
-        x = x.view(-1, seq_len, x.shape[-1])
-        x, (hn, cn) = self.lstm(x)
-        x = self.linear(x) # output on the last day
+        x = x.view(-1, num_channel, 15, 15) # (B*L, C, D, D)
+        x = self.cnn(x) # (B*L, C, D, D)
+        x = self.flat_linear(x) # (B*L, D)
+        x = x.view(-1, seq_len, x.shape[-1]) # (B, L, D)
+        x, (hn, cn) = self.lstm(x) # (B, L, D)
+        x = self.linear(x) # (B, L, D)
         if self.cross_entropy:
-            x = x.view(-1, -1, 6, 15)
+            x = x.view(-1, seq_len, 6, 15) # (B, L, C, D)
+            x = x.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
 
         return x
 
@@ -91,17 +92,23 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
     for batch, (X, y) in enumerate(dataloader):
         # Compute prediction and loss
         X = X.to(device)
+        pred = model(X)  # (B, L, D) / (B, C, L, D)
+        
         if cross_entropy:
-            y = (y - 1).long()
-        y = y.to(device)
-        pred = model(X)
-        L = pred.shape[1]
-        pred_t = pred[:,-1, :]
-        loss = loss_fn(pred, torch.unsqueeze(y, 1).expand(-1, L, -1)) # pred_t
+            y = (y - 1).long() # Class indices in the range [0,C)
+            L = pred.shape[2] 
+            pred_t = pred[:, :, -1, :]
+        else:
+            L = pred.shape[1] 
+            pred_t = pred[:,-1, :]
+        y = y.to(device) # (B, D)
+        
+        
+        loss = loss_fn(pred, torch.unsqueeze(y, 1).expand(-1, L, -1)) # (B, L, D) # pred_t
         # logging.info(f"Loss Shape: {loss.shape}")
-        loss = torch.sum(loss, dim=-1)
+        loss = torch.sum(loss, dim=-1) # (B, L)
         loss_weight = compute_loss_weight(ratio, L).to(device)
-        loss = torch.mean(loss@loss_weight)
+        loss = torch.mean(loss@loss_weight) # (B)
 
         # Backpropagation
         loss.backward()
@@ -111,7 +118,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
             if cross_entropy:
-                pred_arg = torch.argmax(pred_t, dim=1)
+                pred_arg = torch.argmax(pred_t, dim=1) # y-1
             else:
                 pred_arg = torch.round(pred_t)
             accuracy = (pred_arg == y).type(torch.float).sum()/torch.numel(y)
@@ -138,12 +145,17 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
     with torch.no_grad():
         for X, y in dataloader:
             X = X.to(device)
+            pred = model(X)  # (B, L, D) / (B, C, L, D)
+            
             if cross_entropy:
-                y = (y - 1).long()
-            y = y.to(device)
-            pred = model(X)
-            L = pred.shape[1]
-            pred_t = pred[:,-1, :]
+                y = (y - 1).long() # Class indices in the range [0,C)
+                L = pred.shape[2] 
+                pred_t = pred[:, :, -1, :]
+            else:
+                L = pred.shape[1] 
+                pred_t = pred[:,-1, :]
+            y = y.to(device) # (B, D)
+            
             loss = loss_fn(pred, torch.unsqueeze(y, 1).expand(-1, L, -1))
             loss = torch.sum(loss, dim=-1)
             loss_weight = compute_loss_weight(ratio, L).to(device)
@@ -155,9 +167,9 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
                 pred_ = torch.round(pred_t)
             accuracy += (pred_ == y).type(torch.float).sum()/torch.numel(y)
             if not table is None:
-                table += accuracy_table(pred, y)
+                table += accuracy_table(pred, y, cross_entropy)
             else:
-                table = accuracy_table(pred, y)
+                table = accuracy_table(pred, y, cross_entropy)
 
     test_loss /= num_batches
     accuracy /= num_batches
@@ -173,13 +185,17 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
     return test_loss, accuracy, df
 
 
-def accuracy_table(pred, target):
-    # pred: N, L, D
+def accuracy_table(pred, target, cross_entropy=False):
+    # pred: N, L, D; N, C, L, D
     # target: N, 15
     # output: 6, L
+    if cross_entropy:
+        pred = torch.argmax(pred, dim=1)+1 # index
+    else:
+        pred = torch.round(pred)
     L = pred.shape[1]
     output = torch.empty(7, L)
-    pred = torch.round(pred)
+    
     target_N = torch.unsqueeze(target, 1).expand(-1, L, -1)
     ids = torch.unique(target, sorted=True)
     assert len(ids) == 6
@@ -258,7 +274,7 @@ if __name__ == '__main__':
     epochs = 100
     weight_decay = 1
     ratio = 0.9
-    cross_entropy = False
+    cross_entropy = True
     if cross_entropy:
         weight = torch.tensor([15/8, 15, 15, 15, 15/3, 15])
         weight = weight/torch.sum(weight)

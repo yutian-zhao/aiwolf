@@ -3,11 +3,12 @@ import torch
 import copy
 import random
 import torch.nn.functional as F
+import numpy as np
 
 # if __name__ == __main__:
 MAX_DAY_LENGTH = 14
-NAME = 'temp_dataset' # "gat2017log15"
-NUM_LOGS = 10000 # 99998 # 10^5-2
+NAME = 'debug_data' # 'temp_dataset' # "gat2017log15"
+NUM_LOGS = 1 # 10000 # 99998 # 10^5-2
 ROLES = ["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED"]
 ROLES_DICT = {"VILLAGER":1, "SEER":2, "MEDIUM":3, "BODYGUARD":4, "WEREWOLF":5, "POSSESSED":6}
 TOKEN_TYPES = ['status', 'divine', 'whisper', 'guard', 'attackVote',    'attack', 'talk', 'vote', 'execute', 'result']
@@ -55,7 +56,8 @@ for root, dirs, files in os.walk(dir, topdown=True):
                             for id, role in id_role.items():
                                 if role == "VILLAGER":
                                     villagers_id.append(id)
-                            id = random.choice(villagers_id)
+                            # id = random.choice(villagers_id)
+                            id = 2
                             day_status[0, 0, id] = 1
                         have_voted = []
                         day_status[0, 3] = copy.deepcopy(prev_day_vote_matrix)
@@ -123,8 +125,10 @@ for root, dirs, files in os.walk(dir, topdown=True):
                 
     print("{} done.".format(root))
 
-assert log_count == 10000 # 99998
+assert log_count == NUM_LOGS # 10000 # 99998
 print("{} games loaded.".format(len(data)))
 # print(data[0][0])
 # print(len(data[0][0]))
-torch.save((data, labels), f"data/{NAME}.pt")
+# torch.save((data, labels), f"data/{NAME}.pt")
+with open("debug.log", 'w') as f, np.printoptions(threshold=np.inf):
+    f.write(str(np.array(data)))
