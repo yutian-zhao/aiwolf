@@ -46,30 +46,48 @@ if __name__ == '__main__':
     )
     print(f'Using device: {device}')
 
-    name = "CNNLSTM_0625170355"
-    model = torch.load(f"models/{name}.pt").to(device)
-    dataset_name = 'gat2017log15'
-    dataset_dir = f"data/{dataset_name}.pt"
-    aiwolf_dataset = AIWolfDataset(dataset_dir)
-    test_dataloader = DataLoader(aiwolf_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-
     learning_rate = 1e-4
     batch_size = 64
     epochs = 100
     weight_decay = 1
     ratio = 0.9
-    cross_entropy = False
+    cross_entropy = True
+    bce_loss = False
+    pred_role = "werewolf"
     if cross_entropy:
-        weight = torch.tensor([15/8, 15, 15, 15, 15/3, 15])
+        weight = torch.tensor([0, 0, 0, 0, 1, 0]) # [15/8, 15, 15, 15, 15/3, 15] [15/4, 15, 15, 0, 30, 15]
         weight = weight/torch.sum(weight)
         weight = weight.to(device)
+        # TODO: None reduction cross entropy loss need check!
         loss_fn = nn.CrossEntropyLoss(weight=weight, reduction="none")
+    elif bce_loss:
+        loss_fn = nn.BCELoss(reduction="none")
     else:
         loss_fn = nn.HuberLoss(reduction="none", delta=1.0) # nn.MSELoss(reduction="none") #
 
-    test_loss, test_acc, test_table = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, ratio=ratio)
-    print(test_table)
-    test_table.to_csv('evals/CNNLSTM_{}_{}.csv'.format(dataset_name, start_time.strftime('%m%d%H%M%S')))
+    name = "CNNLSTM_0718233534"
+    model = CNNLSTM(cross_entropy=cross_entropy, bce_loss=bce_loss).to(device)
+    model.load_state_dict(torch.load(f"models/{name}.pt"))
+    model.eval()
+
+    # model = torch.load(f"models/{name}.pt")
+
+    # state_dict = model.state_dict()
+    # model = CNNLSTM(cross_entropy=cross_entropy, bce_loss=bce_loss).to(device)
+    # model.load_state_dict(state_dict)
+    # model.eval()
+
+    dataset_name = 'temp_dataset' # 
+    dataset_dir = f"data/{dataset_name}.pt"
+    aiwolf_dataset = AIWolfDataset([dataset_dir])
+    test_dataloader = DataLoader(aiwolf_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
+
+    test_loss, test_acc, test_table, test_table2 = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role)
+    print("test table: ", test_table)
+    print("test table2: ", test_table2)
+    print("test loss: ", test_loss)
+    print("test accuracy: ", test_acc)
+    test_table.to_csv('evals/{}_{}_{}.csv'.format(name, dataset_name, start_time.strftime('%m%d%H%M%S')))
 
     start_time2 = datetime.now()
 
@@ -83,7 +101,7 @@ if __name__ == '__main__':
     duration = datetime.now() - start_time
     print("Duration: {}".format(str(duration)))
 
-    Convert_ONNX(model, test_data, name)
+    # Convert_ONNX(model, test_data, name)
 
 
 

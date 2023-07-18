@@ -10,9 +10,10 @@ from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 
 class CNNLSTM(nn.Module):
-    def __init__(self, in_channel=8, hid_dim=800, dropout=0.2, cross_entropy=False):
+    def __init__(self, in_channel=8, hid_dim=800, dropout=0, cross_entropy=False, bce_loss=False):
         super().__init__()
         self.cross_entropy = cross_entropy
+        self.bce_loss = bce_loss
         if self.cross_entropy:
             self.out_dim = 6*15
         else:
@@ -34,12 +35,21 @@ class CNNLSTM(nn.Module):
             nn.Linear(5*5*64, hid_dim)
         )
         self.lstm = nn.LSTM(hid_dim, hid_dim, batch_first=True)
-        self.linear = nn.Sequential(
-            nn.Linear(hid_dim, hid_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hid_dim, self.out_dim),
-        )
+        if self.bce_loss:
+            self.linear = nn.Sequential(
+                nn.Linear(hid_dim, hid_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hid_dim, self.out_dim),
+                nn.Sigmoid(),
+            )
+        else:
+            self.linear = nn.Sequential(
+                    nn.Linear(hid_dim, hid_dim),
+                    nn.ReLU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(hid_dim, self.out_dim),
+                )
 
     def forward(self, x):
         """ Computes the forward pass """
@@ -53,21 +63,24 @@ class CNNLSTM(nn.Module):
         x = self.linear(x) # (B, L, D)
         if self.cross_entropy:
             x = x.view(-1, seq_len, 6, 15) # (B, L, C, D)
-            x = x.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
+            # x = x.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
 
         return x
 
 class EarlyStopper:
-    def __init__(self, patience=1, min_delta=0):
+    def __init__(self, if_save=False, patience=1, min_delta=0):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
         self.min_validation_loss = np.inf
+        self.if_save = if_save
 
-    def early_stop(self, validation_loss):
+    def early_stop(self, validation_loss, state_dict=None, path=None):
         if validation_loss < self.min_validation_loss:
             self.min_validation_loss = validation_loss
             self.counter = 0
+            if state_dict and self.if_save and path:
+                torch.save(state_dict, path)
         elif validation_loss > (self.min_validation_loss + self.min_delta):
             self.counter += 1
             if self.counter >= self.patience:
@@ -84,10 +97,9 @@ def compute_loss_weight(ratio, len):
     output /= torch.sum(output)
     return output
 
-def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cross_entropy=False, ratio=1):
+def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cross_entropy=False, bce_loss=False, ratio=1, pred_role='others'):
+    assert not (cross_entropy and bce_loss)
     size = len(dataloader.dataset)
-    # Set the model to training mode - important for batch normalization and dropout layers
-    # Unnecessary in this situation but added for best practices
     model.train()
     for batch, (X, y) in enumerate(dataloader):
         # Compute prediction and loss
@@ -95,9 +107,14 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
         pred = model(X)  # (B, L, D) / (B, C, L, D)
         
         if cross_entropy:
+            pred = pred.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
             y = (y - 1).long() # Class indices in the range [0,C)
             L = pred.shape[2] 
             pred_t = pred[:, :, -1, :]
+        elif bce_loss:
+            y = (y==5).float()
+            L = pred.shape[1] 
+            pred_t = pred[:,-1, :]
         else:
             L = pred.shape[1] 
             pred_t = pred[:,-1, :]
@@ -105,7 +122,6 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
         
         
         loss = loss_fn(pred, torch.unsqueeze(y, 1).expand(-1, L, -1)) # (B, L, D) # pred_t
-        # logging.info(f"Loss Shape: {loss.shape}")
         loss = torch.sum(loss, dim=-1) # (B, L)
         loss_weight = compute_loss_weight(ratio, L).to(device)
         loss = torch.mean(loss@loss_weight) # (B)
@@ -119,9 +135,20 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
             loss, current = loss.item(), (batch + 1) * len(X)
             if cross_entropy:
                 pred_arg = torch.argmax(pred_t, dim=1) # y-1
+                accuracy = (pred_arg == y).type(torch.float).sum()/torch.numel(y)
+            elif bce_loss:
+                if pred_role == 'werewolf':
+                    k = 3
+                elif pred_role == 'villager':
+                    k = 8
+                else:
+                    k = 1
+                idx_n = torch.arange(pred_t.shape[0]).reshape((-1, 1)).expand(-1, k)
+                _, idx = torch.topk(pred_t, 3, dim=-1)
+                accuracy = (y[idx_n, idx]==1).type(torch.float).sum()/(pred_t.shape[0]*k)
             else:
                 pred_arg = torch.round(pred_t)
-            accuracy = (pred_arg == y).type(torch.float).sum()/torch.numel(y)
+                accuracy = (pred_arg == y).type(torch.float).sum()/torch.numel(y)
             logging.info(f"loss: {loss:>7f}  accuracy: {accuracy:>7f}  [{current:>5d}/{size:>5d}]")
             
             writer.add_scalar('Loss/Train', loss,  epoch * len(dataloader) + 
@@ -131,14 +158,14 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
 
     return loss, accuracy
 
-def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode='valid', cross_entropy=False, ratio=1):
-    # Set the model to evaluation mode - important for batch normalization and dropout layers
-    # Unnecessary in this situation but added for best practices
+def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode='valid', cross_entropy=False, bce_loss=False, ratio=1, pred_role="others"):
+    assert not (cross_entropy and bce_loss)
     model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     test_loss, accuracy = 0, 0
     table = None
+    table2 = None
 
     # Evaluating the model with torch.no_grad() ensures that no gradients are computed during test mode
     # also serves to reduce unnecessary gradient computations and memory usage for tensors with requires_grad=True
@@ -148,9 +175,14 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
             pred = model(X)  # (B, L, D) / (B, C, L, D)
             
             if cross_entropy:
+                pred = pred.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
                 y = (y - 1).long() # Class indices in the range [0,C)
                 L = pred.shape[2] 
                 pred_t = pred[:, :, -1, :]
+            elif bce_loss:
+                y = (y==5).float()
+                L = pred.shape[1] 
+                pred_t = pred[:,-1, :]
             else:
                 L = pred.shape[1] 
                 pred_t = pred[:,-1, :]
@@ -162,49 +194,96 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
             test_loss += torch.mean(loss@loss_weight)
             # test_loss += loss_fn(pred_t, y).item()
             if cross_entropy:
-                pred_ = torch.argmax(pred_t, dim=1)
+                pred_arg = torch.argmax(pred_t, dim=1) # y-1
+                accuracy += (pred_arg == y).type(torch.float).sum()/torch.numel(y)
+                if mode=='test':
+                    if not table2 is None:
+                        table2 += accuracy_table_2(pred, y, device)
+                    else:
+                        table2 = accuracy_table_2(pred, y, device)
+            elif bce_loss:
+                if pred_role == 'werewolf':
+                    k = 3
+                elif pred_role == 'villager':
+                    k = 8
+                else:
+                    k = 1
+                pred_arg = pred_t
+                idx_n = torch.arange(pred_t.shape[0]).reshape((-1, 1)).expand(-1, k)
+                _, idx = torch.topk(pred_t, 3, dim=-1)
+                accuracy += (y[idx_n, idx]==1).type(torch.float).sum()/(pred_t.shape[0]*k)
             else:
-                pred_ = torch.round(pred_t)
-            accuracy += (pred_ == y).type(torch.float).sum()/torch.numel(y)
+                pred_arg = torch.round(pred_t)
+                accuracy += (pred_arg == y).type(torch.float).sum()/torch.numel(y)
             if not table is None:
-                table += accuracy_table(pred, y, cross_entropy)
+                table += accuracy_table(pred, y, cross_entropy, bce_loss)
             else:
-                table = accuracy_table(pred, y, cross_entropy)
+                table = accuracy_table(pred, y, cross_entropy, bce_loss)
 
     test_loss /= num_batches
     accuracy /= num_batches
     table /= num_batches
-    df = pd.DataFrame(data=np.round(100*(table).cpu().detach().numpy(), decimals=1), index=["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED", 'mean'], columns=[*range(1, L+1)])
+    if bce_loss:
+        df = pd.DataFrame(data=np.round(100*(table).cpu().detach().numpy(), decimals=1))
+    else:
+        df = pd.DataFrame(data=np.round(100*(table).cpu().detach().numpy(), decimals=1), index=["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED", 'mean'], columns=[*range(1, L+1)])
     logging.info(f"{mode} error: accuracy: {(100*accuracy):>0.1f}%, avg loss: {test_loss:>8f} \n")
+    logging.info(f"sample prediction: {pred_arg[0]}, sample y: {y[0]}")
     logging.info(df)
     logging.info('\n')
+    if cross_entropy and mode=='test':
+        table2 /= num_batches
+        df2 = pd.DataFrame(data=np.round(100*(table2).cpu().detach().numpy(), decimals=1), index=["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED",], columns=[*range(1, L+1)])
+        logging.info(df2)
+        logging.info('\n')
     # logging.info("{} error: accuracy: {:.1f}%, avg loss: {:8f} \n {:.1f}".format(mode, 100*accuracy, test_loss, 100*table))
     if mode == 'valid':
         writer.add_scalar('Loss/Valid', test_loss, epoch * len(dataloader))
         writer.add_scalar('Accuracy/Valid', accuracy, epoch * len(dataloader))
-    return test_loss, accuracy, df
+    return test_loss, accuracy, df, df2
 
 
-def accuracy_table(pred, target, cross_entropy=False):
+def accuracy_table(pred, target, cross_entropy=False, bce_loss=False):
     # pred: N, L, D; N, C, L, D
     # target: N, 15
     # output: 6, L
     if cross_entropy:
-        pred = torch.argmax(pred, dim=1)+1 # index
+        pred = torch.argmax(pred, dim=1)
     else:
         pred = torch.round(pred)
     L = pred.shape[1]
-    output = torch.empty(7, L)
+    if bce_loss:
+        output = torch.empty(2, L)
+    else:
+        output = torch.empty(7, L)
     
     target_N = torch.unsqueeze(target, 1).expand(-1, L, -1)
     ids = torch.unique(target, sorted=True)
-    assert len(ids) == 6
-    assert torch.max(ids) == 5 or torch.max(ids) == 6
+    # assert len(ids) == 6
+    # assert torch.max(ids) == 5 or torch.max(ids) == 6
     for idx, id in enumerate(ids):
         pred_id = torch.where(target_N==id, pred==id, 0)
         output[idx] = torch.sum(pred_id, dim=[0, -1])/torch.sum(target==id)
     output[-1] = torch.mean(output[:-1], dim=0)
     return output
+
+def accuracy_table_2(input, target, device):
+    # input B C L D; target B D
+    # output C L
+    result = torch.zeros(input.shape[0], input.shape[1], input.shape[2]).to(device)
+    _, idx = torch.topk(input, 3, dim=-1)
+    for b in range(input.shape[0]):
+        for c in range(input.shape[1]):
+            for l in range(input.shape[2]):
+                for i in idx[b][c][l]:
+                    if c in [0, 4]:
+                        result[b][c][l] += (target[b][i]==c).float()/3
+                    else:
+                        result[b][c][l] = (target[b][i]==c).float()
+                        break
+    return torch.mean(result, dim=0)
+
+
 
 if __name__ == '__main__':
     start_time = datetime.now()
@@ -224,7 +303,7 @@ if __name__ == '__main__':
 
     dataset_name = 'gat2017log15'
     dataset_dir = f"data/{dataset_name}.pt"
-    aiwolf_dataset = AIWolfDataset(dataset_dir)
+    aiwolf_dataset = AIWolfDataset([dataset_dir])
     random.seed(10)
     # dataset specific
     indices = [*range(1000)]
@@ -275,20 +354,25 @@ if __name__ == '__main__':
     weight_decay = 1
     ratio = 0.9
     cross_entropy = True
+    bce_loss = False
+    pred_role = "werewolf"
     if cross_entropy:
-        weight = torch.tensor([15/8, 15, 15, 15, 15/3, 15])
+        weight = torch.tensor([15/4, 15, 15, 5, 25, 15]) # [0, 0, 0, 0, 1, 0] [15/8, 15, 15, 15, 15/3, 15] 
         weight = weight/torch.sum(weight)
         weight = weight.to(device)
         # TODO: None reduction cross entropy loss need check!
         loss_fn = nn.CrossEntropyLoss(weight=weight, reduction="none")
+    elif bce_loss:
+        loss_fn = nn.BCELoss(reduction="none")
     else:
         loss_fn = nn.HuberLoss(reduction="none", delta=1.0) # nn.MSELoss(reduction="none") # 
+        
 
-    model = CNNLSTM(cross_entropy=cross_entropy).to(device)
+    model = CNNLSTM(cross_entropy=cross_entropy, bce_loss=bce_loss).to(device)
     # writer.add_graph(model, train_dataset[0][0].unsqueeze(0).to(device))
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, 
                                   weight_decay=weight_decay)
-    stopper = EarlyStopper(patience=10, min_delta=-0.001)
+    stopper = EarlyStopper(patience=10, min_delta=-0.001, if_save=True)
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
     valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
@@ -297,18 +381,18 @@ if __name__ == '__main__':
     for t in range(epochs):
         logging.info(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device, writer,
-                    epoch=t, cross_entropy=cross_entropy, ratio=ratio)
-        valid_loss, _ = test_loop(valid_dataloader, model, loss_fn, device, writer, epoch=t, mode='valid', cross_entropy=cross_entropy, ratio=ratio)
-        if stopper.early_stop(valid_loss):
+                    epoch=t, cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role)
+        valid_loss, _, _, _ = test_loop(valid_dataloader, model, loss_fn, device, writer, epoch=t, mode='valid', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role)
+        if stopper.early_stop(valid_loss, model.state_dict(), 'models/CNNLSTM_{}.pt'.format(start_time.strftime('%m%d%H%M%S'))):
             break
-    test_loss, test_acc, test_table = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, ratio=ratio)
+    test_loss, test_acc, test_table, test_table2 = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role)
     writer.add_hparams({'lr': learning_rate, 'bsize': batch_size, "wdecay":weight_decay}, {'Loss/Test': test_loss, 'Accuracy/Test': test_acc})
-    test_table.to_csv('evals/CNNLSTM_{}_{}.csv'.format(dataset_name, start_time.strftime('%m%d%H%M%S')))
+    # test_table.to_csv('evals/CNNLSTM_{}_{}.csv'.format(dataset_name, start_time.strftime('%m%d%H%M%S')))
 
     end_time = datetime.now()
     duration = end_time - start_time
     logging.info("Duration: {}".format(str(duration)))
-
-    torch.save(model, 'CNNLSTM_{}.pt'.format(start_time.strftime('%m%d%H%M%S')))
+    # TODO: Save the best
+    # torch.save(model, 'CNNLSTM_{}.pt'.format(start_time.strftime('%m%d%H%M%S')))
     writer.flush()
     writer.close()

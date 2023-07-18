@@ -32,12 +32,12 @@ Attitude [15, 15] {-1, 0, 1} (agree/disagree)
 output [15] [15*15] [[0.1, 0, 0, ..., 0.7], [0.2, ..., 0.6], ...]
 
 TODO:
-1. Traing for each role.
 2. Auxiliary task.
 3. Feature engineering.
 4. More data.
-5. Weight decay.
-6. Cross entropy.
+5. Model architecture.
+1. Training for each role.
+
 
 
 shuffle (dateset shuffle, role shuffle, id)
