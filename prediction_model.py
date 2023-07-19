@@ -10,10 +10,12 @@ from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 
 class CNNLSTM(nn.Module):
-    def __init__(self, in_channel=8, hid_dim=800, dropout=0, cross_entropy=False, bce_loss=False):
+    def __init__(self, in_channel=8, hid_dim=800, dropout=0, cross_entropy=False, bce_loss=False, auxiliary=False, aux_dim=15):
         super().__init__()
         self.cross_entropy = cross_entropy
         self.bce_loss = bce_loss
+        self.auxiliary = auxiliary
+        self.aux_dim = aux_dim
         if self.cross_entropy:
             self.out_dim = 6*15
         else:
@@ -50,6 +52,14 @@ class CNNLSTM(nn.Module):
                     nn.Dropout(dropout),
                     nn.Linear(hid_dim, self.out_dim),
                 )
+        if auxiliary:
+            self.aux_linear = nn.Sequential(
+                    nn.Linear(hid_dim, 100),
+                    nn.ReLU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(100, self.aux_dim),
+                    nn.Sigmoid(),
+                )
 
     def forward(self, x):
         """ Computes the forward pass """
@@ -60,12 +70,15 @@ class CNNLSTM(nn.Module):
         x = self.flat_linear(x) # (B*L, D)
         x = x.view(-1, seq_len, x.shape[-1]) # (B, L, D)
         x, (hn, cn) = self.lstm(x) # (B, L, D)
+        if self.auxiliary:
+            aux_x = self.aux_linear(x)
         x = self.linear(x) # (B, L, D)
         if self.cross_entropy:
             x = x.view(-1, seq_len, 6, 15) # (B, L, C, D)
             # x = x.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
+        
 
-        return x
+        return x, aux_x
 
 class EarlyStopper:
     def __init__(self, if_save=False, patience=1, min_delta=0):
@@ -97,14 +110,14 @@ def compute_loss_weight(ratio, len):
     output /= torch.sum(output)
     return output
 
-def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cross_entropy=False, bce_loss=False, ratio=1, pred_role='others'):
+def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cross_entropy=False, bce_loss=False, ratio=1, pred_role='others', auxiliary=False):
     assert not (cross_entropy and bce_loss)
     size = len(dataloader.dataset)
     model.train()
-    for batch, (X, y) in enumerate(dataloader):
+    for batch, (X, (y, aux_y)) in enumerate(dataloader):
         # Compute prediction and loss
         X = X.to(device)
-        pred = model(X)  # (B, L, D) / (B, C, L, D)
+        pred, aux_pred = model(X)  # (B, L, D) / (B, C, L, D) # (B, L, D)
         
         if cross_entropy:
             pred = pred.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
@@ -125,6 +138,9 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
         loss = torch.sum(loss, dim=-1) # (B, L)
         loss_weight = compute_loss_weight(ratio, L).to(device)
         loss = torch.mean(loss@loss_weight) # (B)
+
+        if auxiliary:
+            loss += nn.BCELoss()(aux_pred, aux_y) # TODO: weight
 
         # Backpropagation
         loss.backward()
@@ -158,7 +174,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
 
     return loss, accuracy
 
-def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode='valid', cross_entropy=False, bce_loss=False, ratio=1, pred_role="others"):
+def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode='valid', cross_entropy=False, bce_loss=False, ratio=1, pred_role="others", auxiliary=False):
     assert not (cross_entropy and bce_loss)
     model.eval()
     size = len(dataloader.dataset)
@@ -170,9 +186,9 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
     # Evaluating the model with torch.no_grad() ensures that no gradients are computed during test mode
     # also serves to reduce unnecessary gradient computations and memory usage for tensors with requires_grad=True
     with torch.no_grad():
-        for X, y in dataloader:
+        for X, (y, aux_y) in dataloader:
             X = X.to(device)
-            pred = model(X)  # (B, L, D) / (B, C, L, D)
+            pred, aux_pred = model(X)  # (B, L, D) / (B, C, L, D)
             
             if cross_entropy:
                 pred = pred.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
@@ -193,6 +209,11 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
             loss_weight = compute_loss_weight(ratio, L).to(device)
             test_loss += torch.mean(loss@loss_weight)
             # test_loss += loss_fn(pred_t, y).item()
+            if auxiliary:
+                test_loss += nn.BCELoss()(pred, aux_pred)
+                aux_pred_arg = torch.argmax(aux_pred, dim=-1)
+                aux_y_arg = torch.argmax(aux_y, dim=-1)
+                aux_accuracy = torch.mean(aux_pred_arg == aux_y_arg, dim=0)
             if cross_entropy:
                 pred_arg = torch.argmax(pred_t, dim=1) # y-1
                 accuracy += (pred_arg == y).type(torch.float).sum()/torch.numel(y)
@@ -228,6 +249,8 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
     else:
         df = pd.DataFrame(data=np.round(100*(table).cpu().detach().numpy(), decimals=1), index=["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED", 'mean'], columns=[*range(1, L+1)])
     logging.info(f"{mode} error: accuracy: {(100*accuracy):>0.1f}%, avg loss: {test_loss:>8f} \n")
+    if auxiliary:
+        logging.info(f"auxiliary accuracy: {aux_accuracy}")
     logging.info(f"sample prediction: {pred_arg[0]}, sample y: {y[0]}")
     logging.info(df)
     logging.info('\n')
@@ -290,7 +313,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(filename_suffix='CNNLSTM')
     pd.set_option("display.precision", 1)
     
-    logging.basicConfig(filename='logs/{}.log'.format(start_time.strftime('%m%d%H%M%S')), format='%(asctime)s [%(levelname)s] %(message)s', encoding='utf-8', level=logging.INFO)
+    logging.basicConfig(filename='logs/{}.log'.format(start_time.strftime('%m%d%H%M%S')), format='%(asctime)s [%(levelname)s] %(message)s', level=logging.INFO) # encoding='utf-8', 
 
     device = (
         "cuda"
@@ -356,6 +379,7 @@ if __name__ == '__main__':
     cross_entropy = True
     bce_loss = False
     pred_role = "werewolf"
+    auxiliary = True
     if cross_entropy:
         weight = torch.tensor([15/4, 15, 15, 5, 25, 15]) # [0, 0, 0, 0, 1, 0] [15/8, 15, 15, 15, 15/3, 15] 
         weight = weight/torch.sum(weight)
@@ -368,7 +392,7 @@ if __name__ == '__main__':
         loss_fn = nn.HuberLoss(reduction="none", delta=1.0) # nn.MSELoss(reduction="none") # 
         
 
-    model = CNNLSTM(cross_entropy=cross_entropy, bce_loss=bce_loss).to(device)
+    model = CNNLSTM(cross_entropy=cross_entropy, bce_loss=bce_loss, auxiliary=auxiliary).to(device)
     # writer.add_graph(model, train_dataset[0][0].unsqueeze(0).to(device))
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, 
                                   weight_decay=weight_decay)
@@ -381,11 +405,11 @@ if __name__ == '__main__':
     for t in range(epochs):
         logging.info(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device, writer,
-                    epoch=t, cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role)
-        valid_loss, _, _, _ = test_loop(valid_dataloader, model, loss_fn, device, writer, epoch=t, mode='valid', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role)
+                    epoch=t, cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary)
+        valid_loss, _, _, _ = test_loop(valid_dataloader, model, loss_fn, device, writer, epoch=t, mode='valid', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary)
         if stopper.early_stop(valid_loss, model.state_dict(), 'models/CNNLSTM_{}.pt'.format(start_time.strftime('%m%d%H%M%S'))):
             break
-    test_loss, test_acc, test_table, test_table2 = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role)
+    test_loss, test_acc, test_table, test_table2 = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary)
     writer.add_hparams({'lr': learning_rate, 'bsize': batch_size, "wdecay":weight_decay}, {'Loss/Test': test_loss, 'Accuracy/Test': test_acc})
     # test_table.to_csv('evals/CNNLSTM_{}_{}.csv'.format(dataset_name, start_time.strftime('%m%d%H%M%S')))
 

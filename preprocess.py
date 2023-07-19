@@ -7,8 +7,8 @@ import numpy as np
 
 # if __name__ == __main__:
 MAX_DAY_LENGTH = 14
-NAME = 'debug_data' # 'temp_dataset' # "gat2017log15"
-NUM_LOGS = 1 # 10000 # 99998 # 10^5-2
+NAME = "gat2017log15" # 'debug_data' # 'temp_dataset' # 
+NUM_LOGS = 99998 # 10000 # 99998 # 10^5-2
 ROLES = ["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED"]
 ROLES_DICT = {"VILLAGER":1, "SEER":2, "MEDIUM":3, "BODYGUARD":4, "WEREWOLF":5, "POSSESSED":6}
 TOKEN_TYPES = ['status', 'divine', 'whisper', 'guard', 'attackVote',    'attack', 'talk', 'vote', 'execute', 'result']
@@ -18,6 +18,7 @@ num_player = 15
 num_channel = 8
 data = torch.empty(NUM_LOGS, MAX_DAY_LENGTH, num_channel, num_player, num_player)
 labels = torch.empty(NUM_LOGS, num_player)
+vote_labels = torch.empty(NUM_LOGS, MAX_DAY_LENGTH, num_player)
 log_count = 0
 for root, dirs, files in os.walk(dir, topdown=True):
     dirs.sort()
@@ -31,6 +32,8 @@ for root, dirs, files in os.walk(dir, topdown=True):
                 id = None
                 id_role = {}
                 have_voted = []
+                vote_label_game = torch.empty((0, num_player))
+                vote_label_day = torch.zeros((1, num_player))
                 # role depend
                 game_status = torch.empty((0, num_channel, num_player, num_player))
                 day_status = torch.zeros((1, num_channel, num_player, num_player))
@@ -64,8 +67,10 @@ for root, dirs, files in os.walk(dir, topdown=True):
                         prev_day_vote_matrix = copy.deepcopy(vote_matrix)
                         vote_matrix = torch.zeros((num_player, num_player))
                         game_status = torch.cat((game_status, day_status), dim=0)
+                        vote_label_game = torch.cat((vote_label_game, vote_label_day), dim=0)
                         day_checker += 1
                         day_status = torch.zeros((1, num_channel,  num_player, num_player))
+                        vote_label_day = torch.zeros((1, num_player))
                     elif int(tokens[0]) != day_checker:
                         raise Exception("Day check failed! Should be day {} or {}, but got {}.".format(day_checker, day_checker+1, tokens[0]))
                     assert tokens[1] in TOKEN_TYPES
@@ -73,6 +78,9 @@ for root, dirs, files in os.walk(dir, topdown=True):
 
                     if tokens[1] == 'result':
                         game_end = True
+
+                    elif tokens[1] == 'execute':
+                        vote_label_day[0, int(tokens[2])-1] = 1
                     
                     # parse Alive status
                     elif tokens[1] == 'status':
@@ -116,6 +124,11 @@ for root, dirs, files in os.walk(dir, topdown=True):
                 # data = torch.cat((data, game_status), dim=0)
                 data[log_count-1] = game_status
 
+                vote_label_day = vote_label_game[[-1]]
+                for i in range(MAX_DAY_LENGTH-vote_label_game.shape[0]):
+                    vote_label_game = torch.cat((vote_label_game, vote_label_day), dim=0)
+                vote_labels[log_count-1] = vote_label_game
+
                 label = []
                 for i in range(num_player):
                     label.append(ROLES_DICT[id_role[i]])
@@ -129,6 +142,7 @@ assert log_count == NUM_LOGS # 10000 # 99998
 print("{} games loaded.".format(len(data)))
 # print(data[0][0])
 # print(len(data[0][0]))
-# torch.save((data, labels), f"data/{NAME}.pt")
+# print(vote_labels.shape)
+torch.save((data, labels, vote_labels), f"data/{NAME}.pt")
 with open("debug.log", 'w') as f, np.printoptions(threshold=np.inf):
-    f.write(str(np.array(data)))
+    f.write(str(np.array(vote_labels[0])))
