@@ -16,20 +16,45 @@ Alive [15] {0, 1}
 Comeout [15] {0, 14}
 Vote [15, 15] {0,1} (take first if second vote happen (how to detect))
 
+truth
 Divine [15] {0, 14} (specific)
-Guard [15] {0, 1} (specific)
+Guard [15] {0, 1} (specific) - guarded
 Werewolf [15] {0, 1} (specific)
 Medium [15] {0, 1} (specific)
 
 Talk:
-Estimate [15, 15] {0, 14} (can be merged into attitude)
-Divine [15, 15] {-1, 0, 1} (can be merged into attitude)
-IDENTIFIED 
-Declare [15, 15] {0, 1}
+Estimate [15, 15] {0, 14} (attitude)
+Divined [15, 15] {-1, 0, 1} (attitude)
+IDENTIFIED (attitude)
++ guarded
+Declare [15, 15] {0, 1} (attitude)
 
-Attitude [15, 15] {-1, 0, 1} (agree/disagree)
+Attitude [15, 15] {-1, 0, 1} (agree/disagree) (attacked, )
 
 output [15] [15*15] [[0.1, 0, 0, ..., 0.7], [0.2, ..., 0.6], ...]
+
+estimate：X believes that Y’s role is Z. (EstimateContentBuilder)
+comingout：X declares that Y’s role is Z.(ComingoutContentBuilder)
+divination：X divines Y. (DivinationContentBuilder)
+divined：X divined Y, and the result was Z (Human or Wolf)(DivinedResultContentBuilder)
+identified：X used the medium power, and identified Y as Z (Human or Wolf)(IdentContentBuilder)
+guard：X protects Y. (GuardCandidateContentBuilder)
+guarded：X protected Y. (GuardedAgentContentBuilder)
+vote：X votes for Y. (VoteContentBuilder)
+voted ：X voted for Y. (VotedContentBuilder)
+attack：X votes for Y to be attacked.（AttackContentBuilder）
+attacked ：X attacked Y. (AttackedContentBuilder)
+agree：X agrees with broadcast T. (AgreeContentBuilder)
+disagree：X disagrees with broadcast T. (DisagreeContentBuilder)
+request：X requests Y to do Z (RequestContentBuilder)
+inquire：X inquires Y about Z (InquiryContentBuilder)
+because：X states sentence Z because of reason Y (BecauseContentBuilder)
+and：X states A and B and ... (AndContentBuilder)
+or：X states at least one of A or B or ... ( OrContentBuilder)
+xor：X states either A or B (XorContentBuilder)
+not：X negates Y (NotContentBuilder)
+day：X states that Y happened on day T (DayContentBuilder)
+
 
 TODO:
 2. Auxiliary task.
@@ -37,7 +62,6 @@ TODO:
 4. More data.
 5. Model architecture.
 1. Training for each role.
-
 
 
 shuffle (dateset shuffle, role shuffle, id)
