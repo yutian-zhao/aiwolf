@@ -28,10 +28,11 @@ class AIWolfDataset(Dataset):
 if __name__ == '__main__':
     aiwolf_dataset = AIWolfDataset(["data/gat2017log15.pt"])
     print(len(aiwolf_dataset))
-    # data, label = aiwolf_dataset[0]
+    data, (label, vote_label) = aiwolf_dataset[0]
     # torch.set_printoptions(profile="full")
     # print(data[1])
-    # print(data.shape)
-    # print(label)
+    print(data.shape)
+    print(label)
+    print(vote_label)
     # torch.set_printoptions(profile="default")
     # assert torch.sum(data[13]) == 0

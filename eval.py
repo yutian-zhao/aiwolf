@@ -1,4 +1,5 @@
 import logging
+import os
 import torch
 import torch.onnx 
 from logloader import AIWolfDataset
@@ -9,6 +10,7 @@ import numpy as np
 from datetime import datetime
 import pandas as pd
 from prediction_model import CNNLSTM, test_loop
+import json
 
 #Function to Convert to ONNX 
 def Convert_ONNX(model, dummy_input, name): 
@@ -54,6 +56,8 @@ if __name__ == '__main__':
     cross_entropy = True
     bce_loss = False
     pred_role = "werewolf"
+    auxiliary = True
+    
     if cross_entropy:
         weight = torch.tensor([0, 0, 0, 0, 1, 0]) # [15/8, 15, 15, 15, 15/3, 15] [15/4, 15, 15, 0, 30, 15]
         weight = weight/torch.sum(weight)
@@ -65,9 +69,9 @@ if __name__ == '__main__':
     else:
         loss_fn = nn.HuberLoss(reduction="none", delta=1.0) # nn.MSELoss(reduction="none") #
 
-    name = "CNNLSTM_0718233534"
-    model = CNNLSTM(cross_entropy=cross_entropy, bce_loss=bce_loss).to(device)
-    model.load_state_dict(torch.load(f"models/{name}.pt"))
+    name = "0720145843"
+    model = CNNLSTM(cross_entropy=cross_entropy, bce_loss=bce_loss, auxiliary=auxiliary).to(device)
+    model.load_state_dict(torch.load(f"models/CNNLSTM_{name}.pt"))
     model.eval()
 
     # model = torch.load(f"models/{name}.pt")
@@ -82,19 +86,32 @@ if __name__ == '__main__':
     aiwolf_dataset = AIWolfDataset([dataset_dir])
     test_dataloader = DataLoader(aiwolf_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
 
-    test_loss, test_acc, test_table, test_table2 = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role)
-    print("test table: ", test_table)
-    print("test table2: ", test_table2)
-    print("test loss: ", test_loss)
-    print("test accuracy: ", test_acc)
-    test_table.to_csv('evals/{}_{}_{}.csv'.format(name, dataset_name, start_time.strftime('%m%d%H%M%S')))
+    
+    result = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary)
+    json_result = {}
+    for k, v in result.items():
+        if type(v) is torch.Tensor:
+            json_result[k] = v.tolist()
+        elif type(v) is pd.DataFrame:
+            json_result[k] = v.to_string()
+        else:
+            json_result[k] = v
+    # json_result = {k:(v.tolist() if type(v) is torch.Tensor else v) for k, v in result.items()}
+    with open('evals/{}_{}.json'.format(name, dataset_name), "w") as f:
+        json.dump(json_result, f, indent=4)
+
+    # print("test table: ", test_table)
+    # print("test table2: ", test_table2)
+    # print("test loss: ", test_loss)
+    # print("test accuracy: ", test_acc)
+    # test_table.to_csv('evals/{}_{}_{}.csv'.format(name, dataset_name, start_time.strftime('%m%d%H%M%S')))
 
     start_time2 = datetime.now()
 
     test_data = torch.unsqueeze(aiwolf_dataset[0][0], dim=0).to(device)
-    print(test_data.shape)
+    # print(test_data.shape)
     pred = model(test_data)
-    print(pred.shape)
+    # print(pred.shape)
     print("Single pass time: {}".format(str(datetime.now()-start_time2)))
     
     

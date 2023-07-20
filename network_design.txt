@@ -33,6 +33,36 @@ Attitude [15, 15] {-1, 0, 1} (agree/disagree) (attacked, )
 
 output [15] [15*15] [[0.1, 0, 0, ..., 0.7], [0.2, ..., 0.6], ...]
 
+-----------------------------------------------
+
+ROLE
+
+VILLAGER
+BODYGUARD
+POSSESSED
+
+SEER
+MEDIUM
+WEREWOLF
+-------------------------------------
+
+FEATURE 
+
+KNOWN: known role indicator; werewolf*3; 1~15;
+ALIVE: Dead or alive; 1, 0;
+VOTE: first vote result on previous day; 1, 0;
+SKILL: Human or not; -1, 0, 1;
+-------- TALK ---------
+CO: 1~15
+EST: 1~15;
+ATT: -1, 0, 1;
+IDF: -1, 0, 1;
+talk: source (co), target, role, attitude
+estimate and attitude
+any
+assume subjects are all dismissed
+medium get result
+
 estimate：X believes that Y’s role is Z. (EstimateContentBuilder)
 comingout：X declares that Y’s role is Z.(ComingoutContentBuilder)
 divination：X divines Y. (DivinationContentBuilder)
@@ -41,27 +71,32 @@ identified：X used the medium power, and identified Y as Z (Human or Wolf)(Iden
 guard：X protects Y. (GuardCandidateContentBuilder)
 guarded：X protected Y. (GuardedAgentContentBuilder)
 vote：X votes for Y. (VoteContentBuilder)
-voted ：X voted for Y. (VotedContentBuilder)
-attack：X votes for Y to be attacked.（AttackContentBuilder）
-attacked ：X attacked Y. (AttackedContentBuilder)
+// voted ：X voted for Y. (VotedContentBuilder)
+// attack：X votes for Y to be attacked.（AttackContentBuilder）
+// attacked ：X attacked Y. (AttackedContentBuilder)
 agree：X agrees with broadcast T. (AgreeContentBuilder)
 disagree：X disagrees with broadcast T. (DisagreeContentBuilder)
 request：X requests Y to do Z (RequestContentBuilder)
-inquire：X inquires Y about Z (InquiryContentBuilder)
+// inquire：X inquires Y about Z (InquiryContentBuilder)
 because：X states sentence Z because of reason Y (BecauseContentBuilder)
 and：X states A and B and ... (AndContentBuilder)
 or：X states at least one of A or B or ... ( OrContentBuilder)
 xor：X states either A or B (XorContentBuilder)
 not：X negates Y (NotContentBuilder)
-day：X states that Y happened on day T (DayContentBuilder)
+// day：X states that Y happened on day T (DayContentBuilder)
 
 
 TODO:
-2. Auxiliary task.
-3. Feature engineering.
-4. More data.
+3. Feature engineering. (Exception log.)
+4. More data. 5 + 15; 
+7. java code
+1. (Training for each role.)
+6. accuracy measurement
+2. Auxiliary task weight
 5. Model architecture.
-1. Training for each role.
+
+add even not call
+
 
 
 shuffle (dateset shuffle, role shuffle, id)

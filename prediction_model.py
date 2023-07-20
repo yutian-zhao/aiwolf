@@ -132,6 +132,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
             L = pred.shape[1] 
             pred_t = pred[:,-1, :]
         y = y.to(device) # (B, D)
+        aux_y = aux_y.to(device)
         
         
         loss = loss_fn(pred, torch.unsqueeze(y, 1).expand(-1, L, -1)) # (B, L, D) # pred_t
@@ -180,8 +181,10 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     test_loss, accuracy = 0, 0
+    aux_accuracy = 0
     table = None
     table2 = None
+    result = {}
 
     # Evaluating the model with torch.no_grad() ensures that no gradients are computed during test mode
     # also serves to reduce unnecessary gradient computations and memory usage for tensors with requires_grad=True
@@ -203,6 +206,7 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
                 L = pred.shape[1] 
                 pred_t = pred[:,-1, :]
             y = y.to(device) # (B, D)
+            aux_y = aux_y.to(device)
             
             loss = loss_fn(pred, torch.unsqueeze(y, 1).expand(-1, L, -1))
             loss = torch.sum(loss, dim=-1)
@@ -210,10 +214,10 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
             test_loss += torch.mean(loss@loss_weight)
             # test_loss += loss_fn(pred_t, y).item()
             if auxiliary:
-                test_loss += nn.BCELoss()(pred, aux_pred)
+                test_loss += nn.BCELoss()(aux_pred, aux_y)
                 aux_pred_arg = torch.argmax(aux_pred, dim=-1)
                 aux_y_arg = torch.argmax(aux_y, dim=-1)
-                aux_accuracy = torch.mean(aux_pred_arg == aux_y_arg, dim=0)
+                aux_accuracy += torch.mean((aux_pred_arg == aux_y_arg).float(), dim=0) # (L)
             if cross_entropy:
                 pred_arg = torch.argmax(pred_t, dim=1) # y-1
                 accuracy += (pred_arg == y).type(torch.float).sum()/torch.numel(y)
@@ -244,13 +248,18 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
     test_loss /= num_batches
     accuracy /= num_batches
     table /= num_batches
+    result["test_loss"] = test_loss
+    result["accuracy"] = accuracy
     if bce_loss:
         df = pd.DataFrame(data=np.round(100*(table).cpu().detach().numpy(), decimals=1))
     else:
         df = pd.DataFrame(data=np.round(100*(table).cpu().detach().numpy(), decimals=1), index=["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED", 'mean'], columns=[*range(1, L+1)])
+    result['df'] = df
     logging.info(f"{mode} error: accuracy: {(100*accuracy):>0.1f}%, avg loss: {test_loss:>8f} \n")
     if auxiliary:
+        aux_accuracy /= num_batches
         logging.info(f"auxiliary accuracy: {aux_accuracy}")
+        result['aux_accuracy'] = aux_accuracy
     logging.info(f"sample prediction: {pred_arg[0]}, sample y: {y[0]}")
     logging.info(df)
     logging.info('\n')
@@ -259,12 +268,12 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
         df2 = pd.DataFrame(data=np.round(100*(table2).cpu().detach().numpy(), decimals=1), index=["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED",], columns=[*range(1, L+1)])
         logging.info(df2)
         logging.info('\n')
+        result["df2"] = df2
     # logging.info("{} error: accuracy: {:.1f}%, avg loss: {:8f} \n {:.1f}".format(mode, 100*accuracy, test_loss, 100*table))
     if mode == 'valid':
         writer.add_scalar('Loss/Valid', test_loss, epoch * len(dataloader))
         writer.add_scalar('Accuracy/Valid', accuracy, epoch * len(dataloader))
-    return test_loss, accuracy, df, df2
-
+    return result
 
 def accuracy_table(pred, target, cross_entropy=False, bce_loss=False):
     # pred: N, L, D; N, C, L, D
@@ -406,11 +415,12 @@ if __name__ == '__main__':
         logging.info(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device, writer,
                     epoch=t, cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary)
-        valid_loss, _, _, _ = test_loop(valid_dataloader, model, loss_fn, device, writer, epoch=t, mode='valid', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary)
-        if stopper.early_stop(valid_loss, model.state_dict(), 'models/CNNLSTM_{}.pt'.format(start_time.strftime('%m%d%H%M%S'))):
+        result = test_loop(valid_dataloader, model, loss_fn, device, writer,
+                           epoch=t, mode='valid', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary)
+        if stopper.early_stop(result["test_loss"], model.state_dict(), 'models/CNNLSTM_{}.pt'.format(start_time.strftime('%m%d%H%M%S'))):
             break
-    test_loss, test_acc, test_table, test_table2 = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary)
-    writer.add_hparams({'lr': learning_rate, 'bsize': batch_size, "wdecay":weight_decay}, {'Loss/Test': test_loss, 'Accuracy/Test': test_acc})
+    result = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary)
+    writer.add_hparams({'lr': learning_rate, 'bsize': batch_size, "wdecay":weight_decay}, {'Loss/Test': result["test_loss"], 'Accuracy/Test': result["accuracy"]})
     # test_table.to_csv('evals/CNNLSTM_{}_{}.csv'.format(dataset_name, start_time.strftime('%m%d%H%M%S')))
 
     end_time = datetime.now()
