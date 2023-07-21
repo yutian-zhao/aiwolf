@@ -95,8 +95,13 @@ TODO:
 2. Auxiliary task weight
 5. Model architecture.
 
-add even not call
-
+4th International AIWolf Competition(15 players, 686,700 games) (250000)
+2nd International AIWolf Competition ANAC2020Log 10000*2
+1st 2019 10000*2
+CEDEC2018 203*100
+GAT2018 2225*100 irrelevant file
+CEDEC2017 1480*100
+GAT2017 100000*2
 
 
 shuffle (dateset shuffle, role shuffle, id)

@@ -2,25 +2,39 @@
 import os
 import torch
 from torch.utils.data import Dataset
+import gc
+import copy
+
+num_player = 15
+num_channel = 8
+MAX_DAY_LENGTH = 14
 
 class AIWolfDataset(Dataset):
-    def __init__(self, datasets=[]):
+    def __init__(self, dataset_dict):
         super().__init__()
-        data_list = []
-        label_list = []
-        vote_label_list = []
-        for dataset in datasets:
-            data, labels, vote_labels = torch.load(dataset)
-            data_list.append(data)
-            label_list.append(labels)
-            vote_label_list.append(vote_labels)
+        self.dataset_len = 0
+        for dataset, limit in dataset_dict.items():
+            self.dataset_len += limit
 
-        self.data = torch.cat(data_list, dim=0)
-        self.labels = torch.cat(label_list, dim=0)
-        self.vote_labels = torch.cat(vote_label_list, dim=0)
+        self.data = torch.empty(self.dataset_len, MAX_DAY_LENGTH, num_channel, num_player, num_player)
+        self.labels = torch.empty(self.dataset_len, num_player)
+        self.vote_labels = torch.empty(self.dataset_len, MAX_DAY_LENGTH, num_player)
+        self.head = 0
+
+        for dataset, limit in dataset_dict.items():
+            data, labels, vote_labels = torch.load(dataset)
+            self.data[self.head:self.head+limit] = data[:limit]
+            self.labels[self.head:self.head+limit] = labels[:limit]
+            self.vote_labels[self.head:self.head+limit] = vote_labels[:limit]
+            self.head += limit
+            del data
+            del labels
+            del vote_labels
+            gc.collect()
+            print(f"{dataset} loaded")
 
     def __len__(self):
-        return len(self.data)
+        return self.dataset_len
 
     def __getitem__(self, idx):
         return self.data[idx], (self.labels[idx], self.vote_labels[idx])

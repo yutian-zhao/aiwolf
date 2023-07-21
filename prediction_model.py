@@ -71,14 +71,21 @@ class CNNLSTM(nn.Module):
         x = x.view(-1, seq_len, x.shape[-1]) # (B, L, D)
         x, (hn, cn) = self.lstm(x) # (B, L, D)
         if self.auxiliary:
-            aux_x = self.aux_linear(x)
+            aux_x = self.aux_linear(x) # (B, L, D)
         x = self.linear(x) # (B, L, D)
         if self.cross_entropy:
             x = x.view(-1, seq_len, 6, 15) # (B, L, C, D)
             # x = x.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
-        
-
-        return x, aux_x
+            softmax_x = torch.nn.functional.softmax(x, dim=2)
+            if self.auxiliary:
+                return x, aux_x, softmax_x
+            else:
+                return x, softmax_x
+        else: 
+            if self.auxiliary:
+                return x, aux_x
+            else:
+                return x
 
 class EarlyStopper:
     def __init__(self, if_save=False, patience=1, min_delta=0):
@@ -117,7 +124,17 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
     for batch, (X, (y, aux_y)) in enumerate(dataloader):
         # Compute prediction and loss
         X = X.to(device)
-        pred, aux_pred = model(X)  # (B, L, D) / (B, C, L, D) # (B, L, D)
+        # (B, L, D) / (B, C, L, D) # (B, L, D)
+        if cross_entropy:
+            if auxiliary:
+                pred, aux_pred, _ = model(X)
+            else:
+                pred, _ = model(X)
+        else: 
+            if auxiliary:
+                pred, aux_pred = model(X)
+            else:
+                pred = model(X)
         
         if cross_entropy:
             pred = pred.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
@@ -152,7 +169,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
             loss, current = loss.item(), (batch + 1) * len(X)
             if cross_entropy:
                 pred_arg = torch.argmax(pred_t, dim=1) # y-1
-                accuracy = (pred_arg == y).type(torch.float).sum()/torch.numel(y)
+                accuracy = (pred_arg[y!=7] == y[y!=7]).type(torch.float).sum()/torch.numel(y[y!=7]) # ignore index
             elif bce_loss:
                 if pred_role == 'werewolf':
                     k = 3
@@ -191,7 +208,17 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
     with torch.no_grad():
         for X, (y, aux_y) in dataloader:
             X = X.to(device)
-            pred, aux_pred = model(X)  # (B, L, D) / (B, C, L, D)
+            # (B, L, D) / (B, C, L, D)
+            if cross_entropy:
+                if auxiliary:
+                    pred, aux_pred, _ = model(X)
+                else:
+                    pred, _ = model(X)
+            else: 
+                if auxiliary:
+                    pred, aux_pred = model(X)
+                else:
+                    pred = model(X)
             
             if cross_entropy:
                 pred = pred.permute(0, 2, 1, 3).contiguous() # (B, C, L, D)
@@ -220,7 +247,7 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
                 aux_accuracy += torch.mean((aux_pred_arg == aux_y_arg).float(), dim=0) # (L)
             if cross_entropy:
                 pred_arg = torch.argmax(pred_t, dim=1) # y-1
-                accuracy += (pred_arg == y).type(torch.float).sum()/torch.numel(y)
+                accuracy += (pred_arg[y!=7] == y[y!=7]).type(torch.float).sum()/torch.numel(y[y!=7]) # ignore index
                 if mode=='test':
                     if not table2 is None:
                         table2 += accuracy_table_2(pred, y, device)
@@ -333,68 +360,72 @@ if __name__ == '__main__':
     )
     logging.info(f"Using {device} device")
 
-    dataset_name = 'gat2017log15'
-    dataset_dir = f"data/{dataset_name}.pt"
-    aiwolf_dataset = AIWolfDataset([dataset_dir])
+    dataset_names = {'data/gamelog2022-686700.pt':100000, 'data/GAT2018.pt':100000, 'data/cedec2017.pt':10000, 'data/gat2017log15.pt':99998, 'data/gat2017log05.pt':100000,  'data/log_cedec2018.pt':20000, 'data/2019final-log15.pt':10000, 'data/2019final-log05.pt':10000, 'data/ANAC2020Log15.pt':10000, 'data/ANAC2020Log05.pt':10000, } #  
+    # dataset_dir = [f"data/{dataset_name}.pt" for dataset_name in dataset_names]
+    aiwolf_dataset = AIWolfDataset(dataset_names)
+    logging.info("data loaded")
     random.seed(10)
+    generator = torch.Generator().manual_seed(42)
     # dataset specific
-    indices = [*range(1000)]
-    if 'gat2017log15' in dataset_dir:
-        invalid_set_indices = [23, 398]
-        indices = [i for i in indices if i not in invalid_set_indices]
+    # indices = [*range(1000)]
+    # if 'gat2017log15' in dataset_dir:
+    #     invalid_set_indices = [23, 398]
+    #     indices = [i for i in indices if i not in invalid_set_indices]
     
-    train_set_indices = random.sample(indices, k=800)
-    valid_set_indices = [i for i in indices if i not in train_set_indices]
-    test_set_indices = random.sample(valid_set_indices, k=int(len(valid_set_indices)/2))
-    valid_set_indices = [i for i in valid_set_indices if i not in
-                        test_set_indices]
-    train_indices = []
-    valid_indices = []
-    test_indices = []
-    for i in range(1000):
-        if i < 23:
-            if i in train_set_indices:
-                train_indices += [(100*i)+j for j in range(100)]
-            elif i in test_set_indices:
-                test_indices += [(100*i)+j for j in range(100)]
-            elif i in valid_set_indices:
-                valid_indices += [(100*i)+j for j in range(100)]
-        elif 23 < i < 398:
-            if i in train_set_indices:
-                train_indices += [(100*i)+j-1 for j in range(100)]
-            elif i in test_set_indices:
-                test_indices += [(100*i)+j-1 for j in range(100)]
-            elif i in valid_set_indices:
-                valid_indices += [(100*i)+j-1 for j in range(100)]
-        else:
-            if i in train_set_indices:
-                train_indices += [(100*i)+j-2 for j in range(100)]
-            elif i in test_set_indices:
-                test_indices += [(100*i)+j-2 for j in range(100)]
-            elif i in valid_set_indices:
-                valid_indices += [(100*i)+j-2 for j in range(100)]
-    assert len(set(test_indices+train_indices+valid_indices)) == 99800, "got {}".format(len(set(test_indices+train_indices+valid_indices)))
+    # train_set_indices = random.sample(indices, k=800)
+    # valid_set_indices = [i for i in indices if i not in train_set_indices]
+    # test_set_indices = random.sample(valid_set_indices, k=int(len(valid_set_indices)/2))
+    # valid_set_indices = [i for i in valid_set_indices if i not in
+    #                     test_set_indices]
+    # train_indices = []
+    # valid_indices = []
+    # test_indices = []
+    # for i in range(1000):
+    #     if i < 23:
+    #         if i in train_set_indices:
+    #             train_indices += [(100*i)+j for j in range(100)]
+    #         elif i in test_set_indices:
+    #             test_indices += [(100*i)+j for j in range(100)]
+    #         elif i in valid_set_indices:
+    #             valid_indices += [(100*i)+j for j in range(100)]
+    #     elif 23 < i < 398:
+    #         if i in train_set_indices:
+    #             train_indices += [(100*i)+j-1 for j in range(100)]
+    #         elif i in test_set_indices:
+    #             test_indices += [(100*i)+j-1 for j in range(100)]
+    #         elif i in valid_set_indices:
+    #             valid_indices += [(100*i)+j-1 for j in range(100)]
+    #     else:
+    #         if i in train_set_indices:
+    #             train_indices += [(100*i)+j-2 for j in range(100)]
+    #         elif i in test_set_indices:
+    #             test_indices += [(100*i)+j-2 for j in range(100)]
+    #         elif i in valid_set_indices:
+    #             valid_indices += [(100*i)+j-2 for j in range(100)]
+    # assert len(set(test_indices+train_indices+valid_indices)) == 99800, "got {}".format(len(set(test_indices+train_indices+valid_indices)))
+    # train_dataset = torch.utils.data.Subset(aiwolf_dataset, train_indices)
+    # test_dataset = torch.utils.data.Subset(aiwolf_dataset, test_indices)
+    # valid_dataset = torch.utils.data.Subset(aiwolf_dataset, valid_indices)
     
-    train_dataset = torch.utils.data.Subset(aiwolf_dataset, train_indices)
-    test_dataset = torch.utils.data.Subset(aiwolf_dataset, test_indices)
-    valid_dataset = torch.utils.data.Subset(aiwolf_dataset, valid_indices)
+    train_dataset, test_dataset, valid_dataset = torch.utils.data.random_split(aiwolf_dataset, [0.8, 0.1, 0.1], generator=generator)
+    
     logging.info("training dataset len: {}; valid dataset: {}, testing dataset len: {}".format(len(train_dataset), len(valid_dataset), len(test_dataset)))
 
     learning_rate = 1e-4
     batch_size = 64
     epochs = 100
-    weight_decay = 1
+    weight_decay = 0.1
     ratio = 0.9
     cross_entropy = True
     bce_loss = False
     pred_role = "werewolf"
     auxiliary = True
     if cross_entropy:
-        weight = torch.tensor([15/4, 15, 15, 5, 25, 15]) # [0, 0, 0, 0, 1, 0] [15/8, 15, 15, 15, 15/3, 15] 
+        weight = torch.tensor([15/3, 15, 15, 0, 30, 15]) # [0, 0, 0, 0, 1, 0] [15/8, 15, 15, 15, 15/3, 15] 
         weight = weight/torch.sum(weight)
         weight = weight.to(device)
         # TODO: None reduction cross entropy loss need check!
-        loss_fn = nn.CrossEntropyLoss(weight=weight, reduction="none")
+        loss_fn = nn.CrossEntropyLoss(weight=weight, ignore_index =7, reduction="none")
     elif bce_loss:
         loss_fn = nn.BCELoss(reduction="none")
     else:

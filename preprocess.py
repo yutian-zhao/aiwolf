@@ -17,18 +17,19 @@ def count_log(dir):
     return log_count
 
 MAX_DAY_LENGTH = 14
-NAME = "debug_data" # 'debug_data' # 'temp_dataset' # gat2017log15
+NAME = 'cedec2017' # 'GAT2018' #'log_cedec2018' # '2019final-log05' # 'ANAC2020Log15' # "gamelog2022-686700" # 'debug_data' # 'temp_dataset' # gat2017log15
 dir = f"data/{NAME}" # broken file: 398/076, 023/017
 NUM_LOGS = count_log(dir) # 10000 # 10000 # 99998 # 10^5-2
+MAX_LOG_NUM = 250000
 ROLES = ["VILLAGER", "SEER", "MEDIUM", "BODYGUARD", "WEREWOLF", "POSSESSED"]
 HUMAN_ROLES = ["VILLAGER", "SEER", "MEDIUM", "BODYGUARD"]
 ROLES_DICT = {"VILLAGER":1, "SEER":2, "MEDIUM":3, "BODYGUARD":4, "WEREWOLF":5, "POSSESSED":6}
 TOKEN_TYPES = ['status', 'divine', 'whisper', 'guard', 'attackVote',    'attack', 'talk', 'vote', 'execute', 'result']
 num_player = 15
 num_channel = 8
-data = torch.empty(NUM_LOGS, MAX_DAY_LENGTH, num_channel, num_player, num_player)
-labels = torch.empty(NUM_LOGS, num_player)
-vote_labels = torch.empty(NUM_LOGS, MAX_DAY_LENGTH, num_player)
+data = torch.empty(min(NUM_LOGS, MAX_LOG_NUM), MAX_DAY_LENGTH, num_channel, num_player, num_player)
+labels = torch.empty(min(NUM_LOGS, MAX_LOG_NUM), num_player)
+vote_labels = torch.empty(min(NUM_LOGS, MAX_LOG_NUM), MAX_DAY_LENGTH, num_player)
 log_count = 0
 talks = []
 
@@ -43,7 +44,7 @@ def get_content_list(content):
                 begin_idx = idx
         if s == ')':
             lb -= 1
-            if begin_idx and lb==0:
+            if begin_idx is not None and lb==0:
                 content_list.append(content[begin_idx+1:idx])
                 begin_idx = None
     return content_list
@@ -63,7 +64,7 @@ def parse_content(content, day_status, italker, update, day):
     if content.startswith('ESTIMATE'):
         itarget = int(content.split(" ")[1][-3:-1])-1
         estimate_role = content.split(" ")[-1]
-        if estimate_role != 'ANY':
+        if estimate_role in ROLES_DICT.keys():
             estimate_result = ROLES_DICT[estimate_role]
             attitude = 1 if estimate_role in HUMAN_ROLES else -1 
             target_attitude.append((itarget, attitude))
@@ -72,7 +73,7 @@ def parse_content(content, day_status, italker, update, day):
                 day_status[0, 6, italker, itarget] = attitude
     elif content.startswith('COMINGOUT'):
         target_role = content.split(" ")[-1]
-        if target_role != 'ANY':
+        if target_role in ROLES_DICT.keys():
             co_result = ROLES_DICT[target_role]
             if update:
                 day_status[0, 4, italker] = co_result
@@ -179,10 +180,27 @@ if __name__ == '__main__':
         dirs.sort()
         if len(dirs)==0:
             for name in sorted(files):
-                if name.endswith(".log"):
+                if name.endswith(".log") and log_count < MAX_LOG_NUM:
                     with open(os.path.join(root, name), "r") as f:
-                        log_count += 1
                         lines = f.readlines()
+                        game_type = 0
+                        if len(lines)==0:
+                            break
+                        while '0,status' in lines[game_type]:
+                            game_type +=1
+                        if not game_type in [5, 15]:
+                            print(os.path.join(root, name))
+                            break
+                        valid = False
+                        for i in range(15):
+                            if 'result' in lines[-i-1]:
+                                valid = True
+                                break
+                        if not valid:
+                            print(os.path.join(root, name))
+                            break
+                        log_count += 1
+                        
                         day_checker = 1
                         game_end = False
                         id = None
@@ -191,7 +209,10 @@ if __name__ == '__main__':
                         vote_label_game = torch.empty((0, num_player))
                         vote_label_day = torch.zeros((1, num_player))
                         # role depend
-                        role = "SEER" # random.choice(ROLES)
+                        if game_type == 5:
+                            role = random.choice(["VILLAGER", "SEER", "WEREWOLF", "POSSESSED"])
+                        else:
+                            role = random.choice(ROLES)
                         game_status = torch.empty((0, num_channel, num_player, num_player))
                         day_status = torch.zeros((1, num_channel, num_player, num_player))
                         prev_day_vote_matrix = torch.zeros((num_player, num_player))
@@ -301,20 +322,30 @@ if __name__ == '__main__':
 
                         label = []
                         for i in range(num_player):
-                            label.append(ROLES_DICT[id_role[i]])
+                            if i < game_type:
+                                label.append(ROLES_DICT[id_role[i]])
+                            else:
+                                label.append(7) # not predict bodyguard
                         label = torch.tensor(label, dtype=torch.int) # unsqueeze
                         # labels = torch.cat((labels, label), dim=0)
+                        # if label.shape[0] < num_player:
+                        #     label = torch.nn.pad(label, (0, num_player-label.shape[0]), mode='constant', value=0)
                         labels[log_count-1] = label
                     
             print("{} done.".format(root))
 
     # assert log_count == NUM_LOGS, log_count # 10000 # 99998
     print("log_count: ", log_count)
+    if log_count < min(NUM_LOGS, MAX_LOG_NUM):
+        print(f"WARNING: trim logs! expected num of log is {min(NUM_LOGS, MAX_LOG_NUM)}")
+        data = data[:log_count]
+        labels = labels[:log_count]
+        vote_labels = vote_labels[:log_count]
     print("{} games loaded.".format(len(data)))
-    # print(data[0][0])
-    # print(len(data[0][0]))
-    # print(vote_labels.shape)
+    print(data.shape)
+    print(labels.shape)
+    print(vote_labels.shape)
     torch.save((data, labels, vote_labels), f"data/{NAME}.pt")
-    with open("debug.log", 'w') as f, np.printoptions(threshold=np.inf):
-        f.write(str(np.array(data)))
-        f.write(str(np.array(labels)))
+    # with open("debug.log", 'w') as f, np.printoptions(threshold=np.inf):
+    #     f.write(str(np.array(data)))
+    #     f.write(str(np.array(labels)))
