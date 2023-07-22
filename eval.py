@@ -69,7 +69,7 @@ if __name__ == '__main__':
     else:
         loss_fn = nn.HuberLoss(reduction="none", delta=1.0) # nn.MSELoss(reduction="none") #
 
-    name = "0722054515"
+    name = "0722172447"
     model = CNNLSTM(cross_entropy=cross_entropy, bce_loss=bce_loss, auxiliary=auxiliary).to(device)
     model.load_state_dict(torch.load(f"models/CNNLSTM_{name}.pt"))
     model.eval()
@@ -81,9 +81,9 @@ if __name__ == '__main__':
     # model.load_state_dict(state_dict)
     # model.eval()
 
-    dataset_name = 'temp_dataset' # temp_dataset
+    dataset_name = 'log' # temp_dataset
     dataset_dir = f"data/{dataset_name}.pt"
-    aiwolf_dataset = AIWolfDataset({dataset_dir:10000})
+    aiwolf_dataset = AIWolfDataset({dataset_dir:100})
     test_dataloader = DataLoader(aiwolf_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
 
     
@@ -118,7 +118,7 @@ if __name__ == '__main__':
     duration = datetime.now() - start_time
     print("Duration: {}".format(str(duration)))
 
-    Convert_ONNX(model, test_data, f"CNNLSTM_{name}")
+    # Convert_ONNX(model, test_data, f"CNNLSTM_{name}")
 
 
 

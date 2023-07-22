@@ -87,6 +87,7 @@ not：X negates Y (NotContentBuilder)
 
 
 TODO:
+Debug performance
 3. Feature engineering. (Exception log.)
 4. More data. 5 + 15; 
 7. java code
@@ -94,6 +95,8 @@ TODO:
 6. accuracy measurement
 2. Auxiliary task weight
 5. Model architecture.
+8. change player choice
+9. write policy
 
 4th International AIWolf Competition(15 players, 686,700 games) (250000)
 2nd International AIWolf Competition ANAC2020Log 10000*2

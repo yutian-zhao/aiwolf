@@ -17,7 +17,7 @@ def count_log(dir):
     return log_count
 
 MAX_DAY_LENGTH = 14
-NAME = 'cedec2017' # 'GAT2018' #'log_cedec2018' # '2019final-log05' # 'ANAC2020Log15' # "gamelog2022-686700" # 'debug_data' # 'temp_dataset' # gat2017log15
+NAME = 'log' # 'cedec2017' # 'GAT2018' #'log_cedec2018' # '2019final-log05' # 'ANAC2020Log15' # "gamelog2022-686700" # 'debug_data' # 'temp_dataset' # gat2017log15
 dir = f"data/{NAME}" # broken file: 398/076, 023/017
 NUM_LOGS = count_log(dir) # 10000 # 10000 # 99998 # 10^5-2
 MAX_LOG_NUM = 250000
@@ -112,7 +112,7 @@ def parse_content(content, day_status, italker, update, day):
             if update:
                 day_status[0, 6, italker, itarget] = 1
             target_attitude.append((itarget, 1))
-    elif content.startswith('VOTE'):
+    elif content.startswith('VOTE') and not content.startswith('VOTED'):
         target = content.split(" ")[1]
         if  target != 'ANY':
             itarget = int(content[-3:-1]) - 1
@@ -247,7 +247,9 @@ if __name__ == '__main__':
                                             day_status[0, 0, i] = ROLES_DICT[role]
                                     else:
                                         day_status[0, 0, id] = ROLES_DICT[role]
-                                    
+                                if len(divine_results)>0:
+                                    divine_result = divine_results.pop(0)
+                                    day_status[0, 3, divine_result[0]] = divine_result[1]
                                 have_voted = []
                                 talks = []
                                 day_status[0, 2] = copy.deepcopy(prev_day_vote_matrix)
@@ -260,9 +262,7 @@ if __name__ == '__main__':
                                 vote_label_day = torch.zeros((1, num_player))
                                 if prev_executed and not medium_dead:
                                     day_status[0, 3, prev_executed[0]] = prev_executed[1]
-                                if len(divine_results)>0:
-                                    divine_result = divine_results.pop(0)
-                                    day_status[0, 3, divine_result[0]] = divine_result[1]
+                                
                             # elif int(tokens[0]) != day_checker:
                             #     raise Exception("Day check failed! Should be day {} or {}, but got {}.".format(day_checker, day_checker+1, tokens[0]))
                             assert tokens[1] in TOKEN_TYPES
@@ -347,5 +347,5 @@ if __name__ == '__main__':
     print(vote_labels.shape)
     torch.save((data, labels, vote_labels), f"data/{NAME}.pt")
     # with open("debug.log", 'w') as f, np.printoptions(threshold=np.inf):
-    #     f.write(str(np.array(data)))
-    #     f.write(str(np.array(labels)))
+    #     f.write(str(np.array(data[0])))
+    #     f.write(str(np.array(labels[0])))
