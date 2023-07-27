@@ -11,6 +11,9 @@ import pandas as pd
 
 class CNNLSTM(nn.Module):
     def __init__(self, in_channel=8, hid_dim=800, dropout=0, cross_entropy=False, bce_loss=False, auxiliary=False, aux_dim=15):
+        # cross_entropy: use cross entropy loss
+        # bec_loss: use BCELoss
+        # auxiliary: whether include loss of auxiliary task (vote prediction)
         super().__init__()
         self.cross_entropy = cross_entropy
         self.bce_loss = bce_loss
@@ -93,6 +96,9 @@ class CNNLSTM(nn.Module):
 
 class EarlyStopper:
     def __init__(self, if_save=False, patience=1, min_delta=0):
+        # if_save: whether save the best model so far
+        # patience: stop training after ```patience``` times iterations
+        # min_delta: tolerance when comparing losses
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -112,6 +118,8 @@ class EarlyStopper:
         return False
 
 def compute_loss_weight(ratio, len):
+    # output: [1, ratio, ratio**2, ..., ratio**(len-1)]
+    # for cross entropy loss
     output = []
     item = 1
     for i in range(len):
@@ -122,6 +130,9 @@ def compute_loss_weight(ratio, len):
     return output
 
 def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cross_entropy=False, bce_loss=False, ratio=1, pred_role='others', auxiliary=False):
+    # writer: tensorboard writer
+    # ratio: cross entropy wight ratio
+    # pred_role: for BCELoss. "werewolf", "villager"
     assert not (cross_entropy and bce_loss)
     size = len(dataloader.dataset)
     model.train()
@@ -169,6 +180,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, device, writer, epoch, cro
         optimizer.step()
         optimizer.zero_grad()
 
+        # logging
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
             if cross_entropy:
@@ -244,6 +256,7 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
             loss_weight = compute_loss_weight(ratio, L).to(device)
             test_loss += torch.mean(loss@loss_weight)
             # test_loss += loss_fn(pred_t, y).item()
+            # compute evaluation stats
             if auxiliary:
                 test_loss += nn.BCELoss()(aux_pred, aux_y)
                 aux_pred_arg = torch.argmax(aux_pred, dim=-1)
@@ -307,6 +320,7 @@ def test_loop(dataloader, model, loss_fn, device, writer=None, epoch=None, mode=
     return result
 
 def accuracy_table(pred, target, cross_entropy=False, bce_loss=False):
+    # computes element-wise accuracy
     # pred: N, L, D; N, C, L, D
     # target: N, 15
     # output: 6, L
@@ -331,6 +345,7 @@ def accuracy_table(pred, target, cross_entropy=False, bce_loss=False):
     return output
 
 def accuracy_table_2(input, target, device):
+    # compute top 3 recall rate
     # input B C L D; target B D
     # output C L
     result = torch.zeros(input.shape[0], input.shape[1], input.shape[2]).to(device)
@@ -364,52 +379,13 @@ if __name__ == '__main__':
     )
     logging.info(f"Using {device} device")
 
+    # load dataset
     dataset_names = {'data/gamelog2022-686700.pt':100000, 'data/GAT2018.pt':100000, 'data/cedec2017.pt':10000, 'data/gat2017log15.pt':99998, 'data/gat2017log05.pt':100000,  'data/log_cedec2018.pt':20000, 'data/2019final-log15.pt':10000, 'data/2019final-log05.pt':10000, 'data/ANAC2020Log15.pt':10000, 'data/ANAC2020Log05.pt':10000, } # {'data/gamelog2022-686700.pt':100000, 'data/GAT2018.pt':100000, 'data/cedec2017.pt':10000, 'data/gat2017log15.pt':99998, 'data/gat2017log05.pt':100000,  'data/log_cedec2018.pt':20000, 'data/2019final-log15.pt':10000, 'data/2019final-log05.pt':10000, 'data/ANAC2020Log15.pt':10000, 'data/ANAC2020Log05.pt':10000, } #  
     # dataset_dir = [f"data/{dataset_name}.pt" for dataset_name in dataset_names]
     aiwolf_dataset = AIWolfDataset(dataset_names)
     logging.info("data loaded")
     random.seed(10)
     generator = torch.Generator().manual_seed(42)
-    # dataset specific
-    # indices = [*range(1000)]
-    # if 'gat2017log15' in dataset_dir:
-    #     invalid_set_indices = [23, 398]
-    #     indices = [i for i in indices if i not in invalid_set_indices]
-    
-    # train_set_indices = random.sample(indices, k=800)
-    # valid_set_indices = [i for i in indices if i not in train_set_indices]
-    # test_set_indices = random.sample(valid_set_indices, k=int(len(valid_set_indices)/2))
-    # valid_set_indices = [i for i in valid_set_indices if i not in
-    #                     test_set_indices]
-    # train_indices = []
-    # valid_indices = []
-    # test_indices = []
-    # for i in range(1000):
-    #     if i < 23:
-    #         if i in train_set_indices:
-    #             train_indices += [(100*i)+j for j in range(100)]
-    #         elif i in test_set_indices:
-    #             test_indices += [(100*i)+j for j in range(100)]
-    #         elif i in valid_set_indices:
-    #             valid_indices += [(100*i)+j for j in range(100)]
-    #     elif 23 < i < 398:
-    #         if i in train_set_indices:
-    #             train_indices += [(100*i)+j-1 for j in range(100)]
-    #         elif i in test_set_indices:
-    #             test_indices += [(100*i)+j-1 for j in range(100)]
-    #         elif i in valid_set_indices:
-    #             valid_indices += [(100*i)+j-1 for j in range(100)]
-    #     else:
-    #         if i in train_set_indices:
-    #             train_indices += [(100*i)+j-2 for j in range(100)]
-    #         elif i in test_set_indices:
-    #             test_indices += [(100*i)+j-2 for j in range(100)]
-    #         elif i in valid_set_indices:
-    #             valid_indices += [(100*i)+j-2 for j in range(100)]
-    # assert len(set(test_indices+train_indices+valid_indices)) == 99800, "got {}".format(len(set(test_indices+train_indices+valid_indices)))
-    # train_dataset = torch.utils.data.Subset(aiwolf_dataset, train_indices)
-    # test_dataset = torch.utils.data.Subset(aiwolf_dataset, test_indices)
-    # valid_dataset = torch.utils.data.Subset(aiwolf_dataset, valid_indices)
     
     train_dataset, test_dataset, valid_dataset = torch.utils.data.random_split(aiwolf_dataset, [0.8, 0.1, 0.1], generator=generator)
     
@@ -446,6 +422,7 @@ if __name__ == '__main__':
     valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
 
+    # train and eval
     for t in range(epochs):
         logging.info(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device, writer,
@@ -461,7 +438,6 @@ if __name__ == '__main__':
     end_time = datetime.now()
     duration = end_time - start_time
     logging.info("Duration: {}".format(str(duration)))
-    # TODO: Save the best
     # torch.save(model, 'CNNLSTM_{}.pt'.format(start_time.strftime('%m%d%H%M%S')))
     writer.flush()
     writer.close()

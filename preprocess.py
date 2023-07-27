@@ -33,6 +33,7 @@ vote_labels = torch.empty(min(NUM_LOGS, MAX_LOG_NUM), MAX_DAY_LENGTH, num_player
 log_count = 0
 talks = []
 
+
 def get_content_list(content):
     content_list = []
     begin_idx = None
@@ -50,13 +51,13 @@ def get_content_list(content):
     return content_list
 
 
-
 def parse_content(content, day_status, italker, update, day):
-    '''
-    italker
-    parse content
-        if simple:
-    '''
+    # recursive function 
+    # content: talk content
+    # day_status: day status matrix
+    # italker: talker id
+    # update: if update day_status
+    # day: day number
     # for talk: 0 day; 1 type; 2 day id; 3 turn id; 4 subject; 5 content
     
     target_attitude = []
@@ -183,6 +184,7 @@ if __name__ == '__main__':
                 if name.endswith(".log") and log_count < MAX_LOG_NUM:
                     with open(os.path.join(root, name), "r") as f:
                         lines = f.readlines()
+                        # validate log
                         game_type = 0
                         if len(lines)==0:
                             break
@@ -201,12 +203,13 @@ if __name__ == '__main__':
                             break
                         log_count += 1
                         
+                        # initialize
                         day_checker = 1
                         game_end = False
                         id = None
                         id_role = {}
                         have_voted = []
-                        vote_label_game = torch.empty((0, num_player))
+                        vote_label_game = torch.empty((0, num_player)) # vote result for each day
                         vote_label_day = torch.zeros((1, num_player))
                         # role depend
                         if game_type == 5:
@@ -222,14 +225,14 @@ if __name__ == '__main__':
                         role_ids = set()
                         talks = []
                         divine_results = []
+
                         for line in lines:
                             line = line.strip()
                             tokens = line.split(",")
                             # for talk: 0 day; 1 type; 2 day id; 3 turn id; 4 subject; 5 content
-                            # check validity
+                            # attach updated day status matrix to the game status matrix if day changes
                             if int(tokens[0]) == 1 + day_checker:
-                                ## init
-                                # print("Day {} done.".format(day_checker))
+                                # fill id channel
                                 if id:
                                     if role == 'WEREWOLF':
                                         for i in role_ids:
@@ -240,31 +243,30 @@ if __name__ == '__main__':
                                     for i, r in id_role.items():
                                         if r == role:
                                             role_ids.add(i)
-                                    id = random.choice(list(role_ids))
-                                    # id = 2
+                                    id = random.choice(list(role_ids)) # ramdomly choose role (game viewport)
                                     if role == 'WEREWOLF':
                                         for i in role_ids:
                                             day_status[0, 0, i] = ROLES_DICT[role]
                                     else:
                                         day_status[0, 0, id] = ROLES_DICT[role]
+                                # fill skill channel for divine results
                                 if len(divine_results)>0:
                                     divine_result = divine_results.pop(0)
                                     day_status[0, 3, divine_result[0]] = divine_result[1]
                                 have_voted = []
                                 talks = []
-                                day_status[0, 2] = copy.deepcopy(prev_day_vote_matrix)
-                                prev_day_vote_matrix = copy.deepcopy(vote_matrix)
+                                day_status[0, 2] = copy.deepcopy(prev_day_vote_matrix) # fill vote channel
+                                prev_day_vote_matrix = copy.deepcopy(vote_matrix) # record vote on previous day
                                 vote_matrix = torch.zeros((num_player, num_player))
                                 game_status = torch.cat((game_status, day_status), dim=0)
                                 vote_label_game = torch.cat((vote_label_game, vote_label_day), dim=0)
                                 day_checker += 1
                                 day_status = torch.zeros((1, num_channel,  num_player, num_player))
                                 vote_label_day = torch.zeros((1, num_player))
+                                # fill skill channel for identification results
                                 if prev_executed and not medium_dead:
                                     day_status[0, 3, prev_executed[0]] = prev_executed[1]
-                                
-                            # elif int(tokens[0]) != day_checker:
-                            #     raise Exception("Day check failed! Should be day {} or {}, but got {}.".format(day_checker, day_checker+1, tokens[0]))
+
                             assert tokens[1] in TOKEN_TYPES
                             assert not game_end
 
@@ -278,7 +280,6 @@ if __name__ == '__main__':
                             elif int(tokens[0]) == 0:
                                 continue
 
-                            # parse Alive status
                             elif tokens[1] == 'status':
                                 if day_checker == 1:
                                     id_role[int(tokens[2])-1] = tokens[3]
@@ -309,6 +310,7 @@ if __name__ == '__main__':
                         assert game_status.shape[0] <= MAX_DAY_LENGTH
                         # game_status = torch.unsqueeze(F.pad(game_status, (0, 0, 0, 0, 0, 0, 0, MAX_DAY_LENGTH-game_status.shape[0]), "constant", 0), 0)
 
+                        # pad data to max day length
                         for i in range(MAX_DAY_LENGTH-game_status.shape[0]):
                             game_status = torch.cat((game_status, torch.zeros((1, num_channel, num_player, num_player))), dim=0)
                         # game_status = torch.unsqueeze(game_status, 0)
@@ -325,7 +327,7 @@ if __name__ == '__main__':
                             if i < game_type:
                                 label.append(ROLES_DICT[id_role[i]])
                             else:
-                                label.append(7) # not predict bodyguard
+                                label.append(7) # 7 stands for padding class index
                         label = torch.tensor(label, dtype=torch.int) # unsqueeze
                         # labels = torch.cat((labels, label), dim=0)
                         # if label.shape[0] < num_player:
@@ -334,7 +336,6 @@ if __name__ == '__main__':
                     
             print("{} done.".format(root))
 
-    # assert log_count == NUM_LOGS, log_count # 10000 # 99998
     print("log_count: ", log_count)
     if log_count < min(NUM_LOGS, MAX_LOG_NUM):
         print(f"WARNING: trim logs! expected num of log is {min(NUM_LOGS, MAX_LOG_NUM)}")

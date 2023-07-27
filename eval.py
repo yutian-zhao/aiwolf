@@ -12,14 +12,11 @@ import pandas as pd
 from prediction_model import CNNLSTM, test_loop
 import json
 
-#Function to Convert to ONNX 
+# Function to Convert to ONNX 
 def Convert_ONNX(model, dummy_input, name): 
 
     # set the model to inference mode 
     model.eval() 
-
-    # Let's create a dummy input tensor  
-    # dummy_input = torch.randn(1, input_size, requires_grad=True)  
 
     # Export the model   
     torch.onnx.export(model,         # model being run 
@@ -37,6 +34,7 @@ def Convert_ONNX(model, dummy_input, name):
     print('Model has been converted to ONNX') 
 
 if __name__ == '__main__':
+    # code for setting up
     start_time = datetime.now()
     pd.set_option("display.precision", 1)
     device = (
@@ -86,7 +84,7 @@ if __name__ == '__main__':
     aiwolf_dataset = AIWolfDataset({dataset_dir:100})
     test_dataloader = DataLoader(aiwolf_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
 
-    
+    # test and save results to json
     result = test_loop(test_dataloader, model, loss_fn, device, mode='others', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary) # test
     json_result = {}
     for k, v in result.items():

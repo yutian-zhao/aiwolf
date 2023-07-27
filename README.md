@@ -10,7 +10,7 @@ Desciptions for each file are as follows:
 * ```network_design.txt```
   Design draft. Please ignore.
 * ```performance.py```
-  Compares prediction accuracy between original 
+  Compares prediction accuracy between original. The code is used in ```plot.ipynb```.
 * ```plot.ipynb```
   Visualize evaluation statistics.
 * ```prediction_model.py```
