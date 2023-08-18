@@ -67,7 +67,7 @@ if __name__ == '__main__':
     else:
         loss_fn = nn.HuberLoss(reduction="none", delta=1.0) # nn.MSELoss(reduction="none") #
 
-    name = "0722172447"
+    name = "0818134626"
     model = CNNLSTM(cross_entropy=cross_entropy, bce_loss=bce_loss, auxiliary=auxiliary).to(device)
     model.load_state_dict(torch.load(f"models/CNNLSTM_{name}.pt"))
     model.eval()
@@ -79,13 +79,13 @@ if __name__ == '__main__':
     # model.load_state_dict(state_dict)
     # model.eval()
 
-    dataset_name = 'log' # temp_dataset
+    dataset_name = 'log' # 'final_game_log' # temp_dataset
     dataset_dir = f"data/{dataset_name}.pt"
     aiwolf_dataset = AIWolfDataset({dataset_dir:100})
     test_dataloader = DataLoader(aiwolf_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
 
     # test and save results to json
-    result = test_loop(test_dataloader, model, loss_fn, device, mode='others', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary) # test
+    result = test_loop(test_dataloader, model, loss_fn, device, mode='test', cross_entropy=cross_entropy, bce_loss=bce_loss, ratio=ratio, pred_role=pred_role, auxiliary=auxiliary) # test
     json_result = {}
     for k, v in result.items():
         if type(v) is torch.Tensor:

@@ -17,7 +17,7 @@ def count_log(dir):
     return log_count
 
 MAX_DAY_LENGTH = 14
-NAME = 'log' # 'cedec2017' # 'GAT2018' #'log_cedec2018' # '2019final-log05' # 'ANAC2020Log15' # "gamelog2022-686700" # 'debug_data' # 'temp_dataset' # gat2017log15
+NAME = 'log' # 'final_game_log' # 'cedec2017' # 'GAT2018' #'log_cedec2018' # '2019final-log05' # 'ANAC2020Log15' # "gamelog2022-686700" # 'debug_data' # 'temp_dataset' # gat2017log15
 dir = f"data/{NAME}" # broken file: 398/076, 023/017
 NUM_LOGS = count_log(dir) # 10000 # 10000 # 99998 # 10^5-2
 MAX_LOG_NUM = 250000
@@ -91,19 +91,21 @@ def parse_content(content, day_status, italker, update, day):
     elif content.startswith('DIVINED'):
         if update:
             day_status[0, 4, italker] = ROLES_DICT['SEER']
-        itarget = int(content.split(" ")[1][-3:-1])-1
-        divined_result = 1 if content.split(" ")[-1] == 'HUMAN' else -1
-        if update:
-            day_status[0, 7, italker, itarget] = divined_result
-        target_attitude.append((itarget, divined_result))
+        if content.split(" ")[1] != 'ANY':
+            itarget = int(content.split(" ")[1][-3:-1])-1
+            divined_result = 1 if content.split(" ")[-1] == 'HUMAN' else -1
+            if update:
+                day_status[0, 7, italker, itarget] = divined_result
+            target_attitude.append((itarget, divined_result))
     elif content.startswith('IDENTIFIED'):
         if update:
             day_status[0, 4, italker] = ROLES_DICT['MEDIUM']
-        itarget = int(content.split(" ")[1][-3:-1])-1
-        identified_result = 1 if content.split(" ")[-1] == 'HUMAN' else -1
-        if update:
-            day_status[0, 7, italker, itarget] = identified_result
-        target_attitude.append((itarget, identified_result))
+        if content.split(" ")[1] != 'ANY':
+            itarget = int(content.split(" ")[1][-3:-1])-1
+            identified_result = 1 if content.split(" ")[-1] == 'HUMAN' else -1
+            if update:
+                day_status[0, 7, italker, itarget] = identified_result
+            target_attitude.append((itarget, identified_result))
     elif content.startswith('GUARD') or content.startswith('GUARDED'):
         if update:
             day_status[0, 4, italker] = ROLES_DICT['SEER']
@@ -183,6 +185,7 @@ if __name__ == '__main__':
             for name in sorted(files):
                 if name.endswith(".log") and log_count < MAX_LOG_NUM:
                     with open(os.path.join(root, name), "r") as f:
+                        # print(f"processing {os.path.join(root, name)}")
                         lines = f.readlines()
                         # validate log
                         game_type = 0

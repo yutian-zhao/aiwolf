@@ -349,7 +349,7 @@ def accuracy_table_2(input, target, device):
     # input B C L D; target B D
     # output C L
     result = torch.zeros(input.shape[0], input.shape[1], input.shape[2]).to(device)
-    _, idx = torch.topk(input, 3, dim=-1)
+    _, idx = torch.topk(input, 1, dim=-1)
     for b in range(input.shape[0]):
         for c in range(input.shape[1]):
             for l in range(input.shape[2]):
@@ -380,7 +380,7 @@ if __name__ == '__main__':
     logging.info(f"Using {device} device")
 
     # load dataset
-    dataset_names = {'data/gamelog2022-686700.pt':100000, 'data/GAT2018.pt':100000, 'data/cedec2017.pt':10000, 'data/gat2017log15.pt':99998, 'data/gat2017log05.pt':100000,  'data/log_cedec2018.pt':20000, 'data/2019final-log15.pt':10000, 'data/2019final-log05.pt':10000, 'data/ANAC2020Log15.pt':10000, 'data/ANAC2020Log05.pt':10000, } # {'data/gamelog2022-686700.pt':100000, 'data/GAT2018.pt':100000, 'data/cedec2017.pt':10000, 'data/gat2017log15.pt':99998, 'data/gat2017log05.pt':100000,  'data/log_cedec2018.pt':20000, 'data/2019final-log15.pt':10000, 'data/2019final-log05.pt':10000, 'data/ANAC2020Log15.pt':10000, 'data/ANAC2020Log05.pt':10000, } #  
+    dataset_names = {'data/final_game_log.pt': 16013, 'data/gamelog2022-686700.pt':100000, 'data/GAT2018.pt':100000, 'data/cedec2017.pt':10000, 'data/gat2017log15.pt':99998, 'data/gat2017log05.pt':100000,  'data/log_cedec2018.pt':10000, 'data/2019final-log15.pt':10000, 'data/2019final-log05.pt':10000, 'data/ANAC2020Log15.pt':10000, 'data/ANAC2020Log05.pt':10000, } # {'data/gamelog2022-686700.pt':100000, 'data/GAT2018.pt':100000, 'data/cedec2017.pt':10000, 'data/gat2017log15.pt':99998, 'data/gat2017log05.pt':100000,  'data/log_cedec2018.pt':20000, 'data/2019final-log15.pt':10000, 'data/2019final-log05.pt':10000, 'data/ANAC2020Log15.pt':10000, 'data/ANAC2020Log05.pt':10000, } #  
     # dataset_dir = [f"data/{dataset_name}.pt" for dataset_name in dataset_names]
     aiwolf_dataset = AIWolfDataset(dataset_names)
     logging.info("data loaded")
@@ -392,7 +392,7 @@ if __name__ == '__main__':
     logging.info("training dataset len: {}; valid dataset: {}, testing dataset len: {}".format(len(train_dataset), len(valid_dataset), len(test_dataset)))
 
     learning_rate = 1e-4
-    batch_size = 256
+    batch_size = 64 # 256
     epochs = 100
     weight_decay = 1
     ratio = 0.9
